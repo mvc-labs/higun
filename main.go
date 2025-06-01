@@ -19,6 +19,8 @@ import (
 	"github.com/metaid/utxo_indexer/storage"
 )
 
+var ApiServer *api.Server
+
 func main() {
 	// Load config
 	cfg, err := config.LoadConfig()
@@ -132,17 +134,23 @@ func main() {
 	}
 
 	// Get current blockchain height
-	bestHeight, err := bcClient.GetBlockCount()
-	if err != nil {
-		log.Fatalf("获取区块数量失败: %v", err)
+	var bestHeight int
+	for {
+		bestHeight, err = bcClient.GetBlockCount()
+		if err != nil {
+			log.Printf("获取区块数量失败: %v，3秒后重试...", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		break
 	}
 
 	// Start API server with Gin
-	server := api.NewServer(idx, metaStore, stopCh)
+	ApiServer = api.NewServer(idx, metaStore, stopCh)
 	// 将内存池管理器和区块链客户端传递给API服务器
-	server.SetMempoolManager(mempoolMgr, bcClient)
+	ApiServer.SetMempoolManager(mempoolMgr, bcClient)
 	log.Printf("启动UTXO索引器API，端口:%s", cfg.APIPort)
-	go server.Start(fmt.Sprintf(":%s", cfg.APIPort))
+	go ApiServer.Start(fmt.Sprintf(":%s", cfg.APIPort))
 
 	lastHeightInt, err := strconv.Atoi(string(lastHeight))
 	if err != nil {
@@ -161,8 +169,17 @@ func main() {
 
 	// 使用goroutine启动区块同步，不再自动启动内存池
 	go func() {
-		if err := bcClient.SyncBlocks(idx, checkInterval, stopCh, nil); err != nil {
-			log.Fatalf("同步区块失败: %v", err)
+		if err := bcClient.SyncBlocks(idx, checkInterval, stopCh, firstSyncCompleted); err != nil {
+			log.Printf("同步区块失败: %v，3秒后重试...", err)
+			select {
+			case <-stopCh:
+				return
+			case <-time.After(3 * time.Second):
+				// 继续重试
+			}
+		} else {
+			// 正常退出（一般不会到这里）
+			return
 		}
 	}()
 
@@ -182,4 +199,18 @@ func main() {
 	} else {
 		log.Printf("最终索引高度: %d", finalHeight)
 	}
+}
+func firstSyncCompleted() {
+	log.Println("初始同步完成，启动内存池")
+	err := ApiServer.RebuildMempool()
+	if err != nil {
+		log.Printf("重建内存池失败: %v", err)
+		return
+	}
+	err = ApiServer.StartMempoolCore()
+	if err != nil {
+		log.Printf("启动内存池核心失败: %v", err)
+		return
+	}
+	log.Println("内存池核心已启动")
 }

@@ -643,3 +643,81 @@ func (m *MempoolManager) GetZmqAddress() string {
 	}
 	return ""
 }
+
+// RebuildMempool 重建内存池数据（删除并重新初始化数据库和ZMQ监听）
+func (m *MempoolManager) RebuildMempool() error {
+	log.Println("正在通过删除物理文件重建内存池数据...")
+
+	zmqAddress := ""
+	if m.zmqClient != nil {
+		zmqAddress = m.zmqClient.address
+	}
+
+	incomeDbPath := m.basePath + "/mempool_income"
+	spendDbPath := m.basePath + "/mempool_spend"
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("重建过程中捕获到异常: %v，继续执行文件删除", r)
+		}
+	}()
+
+	log.Println("关闭现有内存池数据库连接...")
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("关闭收入数据库时发生错误: %v", r)
+			}
+		}()
+		if m.mempoolIncomeDB != nil {
+			m.mempoolIncomeDB.Close()
+		}
+	}()
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("关闭支出数据库时发生错误: %v", r)
+			}
+		}()
+		if m.mempoolSpendDB != nil {
+			m.mempoolSpendDB.Close()
+		}
+	}()
+
+	log.Printf("删除内存池收入数据库: %s", incomeDbPath)
+	if err := os.RemoveAll(incomeDbPath); err != nil {
+		log.Printf("删除内存池收入数据库失败: %v", err)
+		return err
+	}
+
+	log.Printf("删除内存池支出数据库: %s", spendDbPath)
+	if err := os.RemoveAll(spendDbPath); err != nil {
+		log.Printf("删除内存池支出数据库失败: %v", err)
+		return err
+	}
+
+	log.Println("重新创建内存池数据库...")
+	newIncomeDB, err := storage.NewSimpleDB(incomeDbPath)
+	if err != nil {
+		log.Printf("重新创建内存池收入数据库失败: %v", err)
+		return err
+	}
+	newSpendDB, err := storage.NewSimpleDB(spendDbPath)
+	if err != nil {
+		newIncomeDB.Close()
+		log.Printf("重新创建内存池支出数据库失败: %v", err)
+		return err
+	}
+	m.mempoolIncomeDB = newIncomeDB
+	m.mempoolSpendDB = newSpendDB
+
+	if zmqAddress != "" {
+		log.Println("重新创建ZMQ客户端...")
+		m.zmqClient = NewZMQClient(zmqAddress, nil)
+		log.Println("重新添加ZMQ监听主题...")
+		m.zmqClient.AddTopic("rawtx", m.HandleRawTransaction)
+	}
+
+	log.Println("内存池数据完全重建成功")
+	return nil
+}
