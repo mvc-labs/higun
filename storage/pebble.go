@@ -81,6 +81,14 @@ const (
 	StoreTypeIncome
 	StoreTypeMeta
 	StoreTypeSpend
+	StoreTypeContractFTUTXO
+	StoreTypeAddressFTIncome
+	StoreTypeAddressFTSpend
+	StoreTypeContractFTInfo
+	StoreTypeContractFTGenesis
+	StoreTypeContractFTGenesisOutput
+	StoreTypeContractFTGenesisUTXO
+	StoreTypeAddressFTUTXOInvalid
 )
 
 func NewMetaStore(dataDir string) (*MetaStore, error) {
@@ -121,6 +129,22 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 			dbPath = filepath.Join(dataDir, "income", fmt.Sprintf("shard_%d", i))
 		case StoreTypeSpend:
 			dbPath = filepath.Join(dataDir, "spend", fmt.Sprintf("shard_%d", i))
+		case StoreTypeContractFTUTXO:
+			dbPath = filepath.Join(dataDir, "contract_ft_utxo", fmt.Sprintf("shard_%d", i))
+		case StoreTypeAddressFTIncome:
+			dbPath = filepath.Join(dataDir, "address_ft_income", fmt.Sprintf("shard_%d", i))
+		case StoreTypeAddressFTSpend:
+			dbPath = filepath.Join(dataDir, "address_ft_spend", fmt.Sprintf("shard_%d", i))
+		case StoreTypeContractFTInfo:
+			dbPath = filepath.Join(dataDir, "contract_ft_info", fmt.Sprintf("shard_%d", i))
+		case StoreTypeContractFTGenesis:
+			dbPath = filepath.Join(dataDir, "contract_ft_genesis", fmt.Sprintf("shard_%d", i))
+		case StoreTypeContractFTGenesisOutput:
+			dbPath = filepath.Join(dataDir, "contract_ft_genesis_output", fmt.Sprintf("shard_%d", i))
+		case StoreTypeContractFTGenesisUTXO:
+			dbPath = filepath.Join(dataDir, "contract_ft_genesis_utxo", fmt.Sprintf("shard_%d", i))
+		case StoreTypeAddressFTUTXOInvalid:
+			dbPath = filepath.Join(dataDir, "address_ft_utxo_invalid", fmt.Sprintf("shard_%d", i))
 		}
 		// Create parent directories if needed
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
@@ -623,6 +647,150 @@ func getAddressByStr(key, results string) (string, error) {
 	return arr[0], nil
 }
 
+// QueryUTXOAddresses 优化版 - 只做必要修改
+func (s *PebbleStore) QueryFtUTXOAddresses(outpoints *[]string, concurrency int) (map[string][]string, error) {
+	if concurrency <= 0 {
+		concurrency = runtime.NumCPU()
+	}
+
+	type job struct {
+		key string // txid:output_index
+	}
+
+	type result struct {
+		key       string
+		valueData string
+		err       error
+	}
+
+	jobsCh := make(chan job, len(*outpoints))
+	resultsCh := make(chan result, len(*outpoints))
+
+	var wg sync.WaitGroup
+
+	// 启动并发 worker
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobsCh {
+				txArr := strings.Split(j.key, ":")
+				if len(txArr) != 2 {
+					resultsCh <- result{key: j.key, err: fmt.Errorf("invalid key format: %s", j.key)}
+					continue
+				}
+				db := s.getShard(txArr[0])
+				value, closer, err := db.Get([]byte(txArr[0]))
+				if err != nil {
+					if err == pebble.ErrNotFound {
+						resultsCh <- result{key: j.key, valueData: "", err: nil}
+					} else {
+						resultsCh <- result{key: j.key, err: err}
+					}
+					continue
+				}
+
+				// 修复1: 立即复制数据并关闭资源，避免defer在循环中积累
+				valueStr := string(append([]byte(nil), value...))
+				closer.Close() // 立即关闭而不是延迟
+
+				resultsCh <- result{
+					key:       j.key,
+					valueData: valueStr,
+				}
+			}
+		}()
+	}
+
+	// 发送任务
+	go func() {
+		for _, outkey := range *outpoints {
+			jobsCh <- job{
+				key: outkey,
+			}
+		}
+		close(jobsCh)
+	}()
+
+	// 收集结果
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	results := make(map[string]string)
+	var finalErr error
+
+	for r := range resultsCh {
+		if r.err != nil {
+			finalErr = r.err
+			break
+		}
+		if r.valueData != "" {
+			//key: txid:output_index
+			//value: FtAddress@CodeHash@Genesis@Amount@Index@Value
+			resultInfo, err := getFtAddressByStr(r.key, r.valueData)
+			if err != nil {
+				finalErr = err
+				break
+			}
+			results[r.key] = resultInfo
+		}
+	}
+
+	finalResults := make(map[string][]string)
+	for k, v := range results {
+		kStrs := strings.Split(k, ":")
+		if len(kStrs) != 2 {
+			return nil, fmt.Errorf("invalid kStrs: %s", kStrs)
+		}
+		vStrs := strings.Split(v, "@")
+		if len(vStrs) != 6 {
+			return nil, fmt.Errorf("invalid vStrs: %s", vStrs)
+		}
+		finalResultKey := vStrs[0]
+		finalResultValue := kStrs[0] + "@" + kStrs[1] + "@" + vStrs[1] + "@" + vStrs[2] + "@" + vStrs[3] + "@" + vStrs[5]
+
+		// key: FtAddress
+		// value: txid@index@codeHash@genesis@amount@value,...
+		finalResults[finalResultKey] = append(finalResults[finalResultKey], finalResultValue)
+	}
+
+	// 修复2: 优化内存使用
+	results = nil // 允许尽早回收
+
+	return finalResults, finalErr
+}
+
+func getFtAddressByStr(key, results string) (string, error) {
+	info := strings.Split(key, ":")
+	if len(info) != 2 {
+		return "", fmt.Errorf("invalid key format: %s", key)
+	}
+	// index := info[1]
+	targetValueInfo := ""
+	valueInfoList := strings.Split(results, ",")
+	for _, valueInfo := range valueInfoList {
+		arr := strings.Split(valueInfo, "@")
+		if len(arr) != 6 {
+			continue
+		}
+		if arr[4] == info[1] {
+			targetValueInfo = valueInfo
+			break
+		}
+	}
+	if targetValueInfo == "" {
+		return "", fmt.Errorf("invalid targetValueInfo: %s", info[1])
+	}
+
+	targetArr := strings.Split(targetValueInfo, "@")
+	if len(targetArr) != 6 {
+		return "", fmt.Errorf("invalid targetArr: %s", targetArr)
+	}
+	return targetValueInfo, nil
+}
+
 // QueryUTXOAddress 查询单个UTXO的地址信息
 func (s *PebbleStore) QueryUTXOAddress(outpoint string) (string, error) {
 	txArr := strings.Split(outpoint, ":")
@@ -653,4 +821,115 @@ func (s *PebbleStore) QueryUTXOAddress(outpoint string) (string, error) {
 	}
 
 	return address, nil
+}
+
+// BulkMergeConcurrent 用于处理map[string]string类型的数据
+func (s *PebbleStore) BulkMergeConcurrent(data *map[string]string, concurrency int) error {
+	if concurrency <= 0 {
+		concurrency = runtime.NumCPU()
+	}
+
+	type job struct {
+		shardIdx int
+		key      string
+		value    []byte
+	}
+
+	jobsCh := make(chan job, len(*data))
+	errCh := make(chan error, 1)
+
+	var wg sync.WaitGroup
+	shardMutexes := make([]sync.Mutex, len(s.shards))
+	shardBatches := make([]*pebble.Batch, len(s.shards))
+
+	// 初始化每个 shard 的 batch
+	for i := range shardBatches {
+		shardBatches[i] = s.shards[i].NewBatch()
+	}
+
+	maxBatchItems := 1000
+	batchItemCounters := make([]int, len(s.shards))
+
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for job := range jobsCh {
+				db := s.shards[job.shardIdx]
+
+				shardMutexes[job.shardIdx].Lock()
+				batch := shardBatches[job.shardIdx]
+				if batch == nil {
+					batch = db.NewBatch()
+					shardBatches[job.shardIdx] = batch
+				}
+
+				if err := batch.Merge([]byte(job.key), job.value, pebble.NoSync); err != nil {
+					shardMutexes[job.shardIdx].Unlock()
+					select {
+					case errCh <- fmt.Errorf("merge failed on shard %d: %w", job.shardIdx, err):
+					default:
+					}
+					return
+				}
+
+				batchItemCounters[job.shardIdx]++
+				if batchItemCounters[job.shardIdx] >= maxBatchItems || batch.Len() >= maxBatchSize {
+					if err := batch.Commit(pebble.NoSync); err != nil {
+						shardMutexes[job.shardIdx].Unlock()
+						select {
+						case errCh <- fmt.Errorf("commit failed on shard %d: %w", job.shardIdx, err):
+						default:
+						}
+						return
+					}
+					batch.Reset()
+					batchItemCounters[job.shardIdx] = 0
+				}
+
+				shardMutexes[job.shardIdx].Unlock()
+			}
+		}()
+	}
+
+	// 发送任务
+	for key, value := range *data {
+		shardIdx := s.getShardIndex(key)
+		valueBytes := []byte(value)
+		jobsCh <- job{
+			shardIdx: shardIdx,
+			key:      key,
+			value:    valueBytes,
+		}
+	}
+	close(jobsCh)
+
+	go func() {
+		wg.Wait()
+		close(errCh)
+	}()
+
+	if err := <-errCh; err != nil {
+		return err
+	}
+
+	for i, batch := range shardBatches {
+		shardMutexes[i].Lock()
+		if batch != nil && batch.Len() > 0 {
+			commitOption := pebble.NoSync
+			if i == len(shardBatches)-1 {
+				commitOption = pebble.Sync
+			}
+			if err := batch.Commit(commitOption); err != nil {
+				_ = batch.Close()
+				shardMutexes[i].Unlock()
+				return fmt.Errorf("failed to commit shard %d: %w", i, err)
+			}
+			_ = batch.Close()
+		}
+		shardMutexes[i].Unlock()
+	}
+
+	return nil
 }

@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  utxo-indexer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: utxo-indexer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 16G
+        reservations:
+          cpus: '2'
+          memory: 8G
+    networks:
+      - utxo-network
+
+networks:
+  utxo-network:
+    driver: bridge 

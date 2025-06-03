@@ -71,6 +71,7 @@ func LoadConfig() (*Config, error) {
 	if configPath == "" {
 		configPath = "config.yaml"
 	}
+	fmt.Println("configPath", configPath)
 
 	if _, err := os.Stat(configPath); err == nil {
 		data, err := os.ReadFile(configPath)

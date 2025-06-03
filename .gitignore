@@ -1,3 +1,6 @@
 utxo_indexer
 data/
 config_mvc.yaml
+config_mvc_*.yaml
+.DS_Store
+.idea
