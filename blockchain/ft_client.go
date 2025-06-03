@@ -130,6 +130,7 @@ func (c *FtClient) SyncBlocks(idx *indexer.ContractFtIndexer, checkInterval time
 
 // ProcessBlock 处理指定高度的区块
 func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, updateHeight bool) error {
+	t1 := time.Now()
 	hash, err := c.GetBlockHash(int64(height))
 	if err != nil {
 		return fmt.Errorf("获取区块哈希失败，高度 %d: %w", height, err)
@@ -139,13 +140,14 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 	if err != nil {
 		return fmt.Errorf("获取区块失败，高度 %d: %w", height, err)
 	}
+	t2 := time.Now()
 
 	txCount := len(block.Tx)
 	maxTxPerBatch := c.GetMaxTxPerBatch()
 
 	if txCount > maxTxPerBatch {
-		fmt.Printf("\n大区块处理: 高度=%d, 交易数=%d, 超过最大批次大小=%d, 将使用Channel进行分批处理\n",
-			height, txCount, maxTxPerBatch)
+		fmt.Printf("\n大区块处理: 高度=%d, 交易数=%d, 超过最大批次大小=%d, 从RPC获取区块数据耗时: %v 秒, 将使用Channel进行分批处理\n",
+			height, txCount, maxTxPerBatch, t2.Sub(t1).Seconds())
 
 		batchCh := make(chan *indexer.ContractFtBlock, 2)
 		errCh := make(chan error, 1)
@@ -154,10 +156,13 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 		go func() {
 			defer close(doneCh)
 			for convertedBlock := range batchCh {
+				// t5 := time.Now()
 				if err := idx.IndexBlock(convertedBlock, updateHeight); err != nil {
 					errCh <- fmt.Errorf("索引高度 %d 的批次失败: %w", height, err)
 					return
 				}
+				// t6 := time.Now()
+				// fmt.Printf("索引区块 %d-%d 耗时: %v 秒\n", convertedBlock.Height, convertedBlock.Height, t6.Sub(t5).Seconds())
 				convertedBlock.Transactions = nil
 				convertedBlock.ContractFtOutputs = nil
 				convertedBlock = nil
@@ -177,7 +182,10 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 				lastBatch = false
 			}
 
+			// t3 := time.Now()
 			convertedBlock := c.convertBlockBatch(block, height, startIdx, endIdx, lastBatch)
+			// t4 := time.Now()
+			// fmt.Printf("转换区块	 %d-%d 耗时: %v 秒\n", startIdx+1, endIdx, t4.Sub(t3).Seconds())
 			if convertedBlock == nil {
 				close(batchCh)
 				return fmt.Errorf("高度 %d 的批次 %d-%d 转换失败", height, startIdx+1, endIdx)
@@ -339,7 +347,7 @@ func (c *FtClient) convertBlock(block *btcjson.GetBlockVerboseTxResult, height i
 				continue
 			}
 
-			outputs = append(outputs, &indexer.ContractFtOutput{
+			output := &indexer.ContractFtOutput{
 				Address:    address,
 				Value:      amount,
 				CodeHash:   ftInfo.CodeHash,
@@ -350,12 +358,14 @@ func (c *FtClient) convertBlock(block *btcjson.GetBlockVerboseTxResult, height i
 				Amount:     strconv.FormatUint(ftInfo.Amount, 10),
 				Decimal:    ftInfo.Decimal,
 				FtAddress:  ftInfo.Address,
-			})
+				Index:      int64(k),
+			}
+			outputs = append(outputs, output)
 
 			if find := contractFtOutputs[address]; find != nil {
-				contractFtOutputs[address] = append(find, outputs[k])
+				contractFtOutputs[address] = append(find, output)
 			} else {
-				contractFtOutputs[address] = []*indexer.ContractFtOutput{outputs[k]}
+				contractFtOutputs[address] = []*indexer.ContractFtOutput{output}
 			}
 		}
 
@@ -412,7 +422,7 @@ func (c *FtClient) convertBlockBatch(block *btcjson.GetBlockVerboseTxResult, hei
 				continue
 			}
 
-			outputs = append(outputs, &indexer.ContractFtOutput{
+			output := &indexer.ContractFtOutput{
 				Address:    address,
 				Value:      amount,
 				CodeHash:   ftInfo.CodeHash,
@@ -423,12 +433,14 @@ func (c *FtClient) convertBlockBatch(block *btcjson.GetBlockVerboseTxResult, hei
 				Amount:     strconv.FormatUint(ftInfo.Amount, 10),
 				Decimal:    ftInfo.Decimal,
 				FtAddress:  ftInfo.Address,
-			})
+				Index:      int64(k),
+			}
+			outputs = append(outputs, output)
 
 			if find := contractFtOutputs[address]; find != nil {
-				contractFtOutputs[address] = append(find, outputs[k])
+				contractFtOutputs[address] = append(find, output)
 			} else {
-				contractFtOutputs[address] = []*indexer.ContractFtOutput{outputs[k]}
+				contractFtOutputs[address] = []*indexer.ContractFtOutput{output}
 			}
 		}
 

@@ -10,7 +10,7 @@ services:
     ports:
       - "7789:7789"
     volumes:
-      - ../pebble_data/data_utxo_ft:/app/data
+      - ../../pebble_data/data_utxo_ft:/app/data
     environment:
       - TZ=Asia/Shanghai
     command: ["-config", "config_mvc_ft_pro.yaml"]
