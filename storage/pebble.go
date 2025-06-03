@@ -734,7 +734,9 @@ func (s *PebbleStore) QueryFtUTXOAddresses(outpoints *[]string, concurrency int)
 				finalErr = err
 				break
 			}
-			results[r.key] = resultInfo
+			if resultInfo != "" {
+				results[r.key] = resultInfo
+			}
 		}
 	}
 
@@ -770,6 +772,7 @@ func getFtAddressByStr(key, results string) (string, error) {
 	// index := info[1]
 	targetValueInfo := ""
 	valueInfoList := strings.Split(results, ",")
+	// fmt.Printf("[getFtAddressByStr]key: %s, results: %s\n", key, results)
 	for _, valueInfo := range valueInfoList {
 		arr := strings.Split(valueInfo, "@")
 		if len(arr) != 6 {
@@ -781,7 +784,8 @@ func getFtAddressByStr(key, results string) (string, error) {
 		}
 	}
 	if targetValueInfo == "" {
-		return "", fmt.Errorf("invalid targetValueInfo: %s", info[1])
+		// return "", fmt.Errorf("invalid targetValueInfo: %s", info[1])
+		return "", nil
 	}
 
 	targetArr := strings.Split(targetValueInfo, "@")
