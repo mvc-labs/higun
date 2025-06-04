@@ -1,7 +1,9 @@
 package decoder
 
 import (
+	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -183,4 +185,30 @@ func ExtractUniqueUtxoInfo(script []byte, param *chaincfg.Params) (*UniqueUtxoIn
 		uniqueUtxoInfo.Genesis = hex.EncodeToString(txoData.GenesisId[:20])
 	}
 	return uniqueUtxoInfo, nil
+}
+
+// ParseSensibleId 解析 sensibleId 字符串，返回 genesisTxId 和 genesisOutputIndex
+func ParseSensibleId(sensibleId string) (string, uint32, error) {
+	// 将 hex 字符串转换为字节数组
+	sensibleIDBuf, err := hex.DecodeString(sensibleId)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// 检查长度是否足够
+	if len(sensibleIDBuf) < 36 {
+		return "", 0, fmt.Errorf("sensibleId length too short")
+	}
+
+	// 获取前32字节作为 genesisTxId，并反转字节顺序
+	genesisTxId := make([]byte, 32)
+	copy(genesisTxId, sensibleIDBuf[:32])
+	for i, j := 0, len(genesisTxId)-1; i < j; i, j = i+1, j-1 {
+		genesisTxId[i], genesisTxId[j] = genesisTxId[j], genesisTxId[i]
+	}
+
+	// 获取后4字节作为 genesisOutputIndex
+	genesisOutputIndex := binary.LittleEndian.Uint32(sensibleIDBuf[32:36])
+
+	return hex.EncodeToString(genesisTxId), genesisOutputIndex, nil
 }

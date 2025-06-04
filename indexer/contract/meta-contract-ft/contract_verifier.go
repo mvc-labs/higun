@@ -1,263 +1,372 @@
 package indexer
 
-// import (
-// 	"fmt"
-// 	"log"
-// 	"strconv"
-// 	"strings"
-// 	"sync"
-// 	"time"
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
-// 	"github.com/metaid/utxo_indexer/storage"
-// )
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/metaid/utxo_indexer/contract/meta-contract/decoder"
+	"github.com/metaid/utxo_indexer/storage"
+)
 
-// // FtVerifyManager 管理FT-UTXO验证
-// type FtVerifyManager struct {
-// 	indexer           *ContractFtIndexer
-// 	verifyInterval    time.Duration // 验证间隔时间
-// 	stopChan          chan struct{} // 停止信号通道
-// 	isRunning         bool
-// 	mu                sync.RWMutex
-// 	lastVerifyHeight  int64  // 上次验证的高度
-// 	verifyBatchSize   int    // 每批验证的数量
-// 	verifyWorkerCount int    // 验证工作协程数
-// 	currentAddress    string // 当前正在验证的地址
-// 	verifyCount       int64  // 已验证的UTXO数量
-// }
+// FtVerifyManager 管理FT-UTXO验证
+type FtVerifyManager struct {
+	indexer           *ContractFtIndexer
+	verifyInterval    time.Duration // 验证间隔时间
+	stopChan          chan struct{} // 停止信号通道
+	isRunning         bool
+	mu                sync.RWMutex
+	verifyBatchSize   int   // 每批验证的数量
+	verifyWorkerCount int   // 验证工作协程数
+	verifyCount       int64 // 已验证的UTXO数量
+}
 
-// // NewFtVerifyManager 创建新的验证管理器
-// func NewFtVerifyManager(indexer *ContractFtIndexer, verifyInterval time.Duration, batchSize, workerCount int) *FtVerifyManager {
-// 	return &FtVerifyManager{
-// 		indexer:           indexer,
-// 		verifyInterval:    verifyInterval,
-// 		stopChan:          make(chan struct{}),
-// 		verifyBatchSize:   batchSize,
-// 		verifyWorkerCount: workerCount,
-// 	}
-// }
+// NewFtVerifyManager 创建新的验证管理器
+func NewFtVerifyManager(indexer *ContractFtIndexer, verifyInterval time.Duration, batchSize, workerCount int) *FtVerifyManager {
+	return &FtVerifyManager{
+		indexer:           indexer,
+		verifyInterval:    verifyInterval,
+		stopChan:          make(chan struct{}),
+		verifyBatchSize:   batchSize,
+		verifyWorkerCount: workerCount,
+	}
+}
 
-// // Start 启动验证管理器
-// func (m *FtVerifyManager) Start() error {
-// 	m.mu.Lock()
-// 	if m.isRunning {
-// 		m.mu.Unlock()
-// 		return fmt.Errorf("验证管理器已经在运行")
-// 	}
-// 	m.isRunning = true
-// 	m.mu.Unlock()
+// Start 启动验证管理器
+func (m *FtVerifyManager) Start() error {
+	m.mu.Lock()
+	if m.isRunning {
+		m.mu.Unlock()
+		return fmt.Errorf("验证管理器已经在运行")
+	}
+	m.isRunning = true
+	m.mu.Unlock()
 
-// 	// 恢复验证进度
-// 	verifyData, err := m.indexer.addressFtVerifyStore.Get([]byte("verify_progress"))
-// 	if err == nil {
-// 		parts := strings.Split(string(verifyData), "@")
-// 		if len(parts) >= 2 {
-// 			m.currentAddress = parts[0]
-// 			m.verifyCount, _ = strconv.ParseInt(parts[1], 10, 64)
-// 		}
-// 	}
+	go m.verifyLoop()
+	return nil
+}
 
-// 	go m.verifyLoop()
-// 	return nil
-// }
+// Stop 停止验证管理器
+func (m *FtVerifyManager) Stop() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-// // Stop 停止验证管理器
-// func (m *FtVerifyManager) Stop() {
-// 	m.mu.Lock()
-// 	defer m.mu.Unlock()
+	if !m.isRunning {
+		return
+	}
 
-// 	if !m.isRunning {
-// 		return
-// 	}
+	close(m.stopChan)
+	m.isRunning = false
+}
 
-// 	close(m.stopChan)
-// 	m.isRunning = false
-// }
+// verifyLoop 验证循环
+func (m *FtVerifyManager) verifyLoop() {
+	ticker := time.NewTicker(m.verifyInterval)
+	defer ticker.Stop()
 
-// // ResetVerifyProgress 重置验证进度
-// func (m *FtVerifyManager) ResetVerifyProgress() error {
-// 	m.mu.Lock()
-// 	defer m.mu.Unlock()
+	for {
+		select {
+		case <-m.stopChan:
+			return
+		case <-ticker.C:
+			if err := m.verifyFtUtxos(); err != nil {
+				log.Printf("验证FT-UTXO失败: %v", err)
+			}
+		}
+	}
+}
 
-// 	m.currentAddress = ""
-// 	m.verifyCount = 0
-// 	return m.indexer.addressFtVerifyStore.Delete([]byte("verify_progress"))
-// }
+// verifyFtUtxos 验证FT-UTXO
+func (m *FtVerifyManager) verifyFtUtxos() error {
+	// 获取未检查的UTXO数据
+	uncheckData := make(map[string]string)
 
-// // verifyLoop 验证循环
-// func (m *FtVerifyManager) verifyLoop() {
-// 	ticker := time.NewTicker(m.verifyInterval)
-// 	defer ticker.Stop()
+	// 遍历所有分片
+	for _, db := range m.indexer.uncheckFtOutpointStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
 
-// 	for {
-// 		select {
-// 		case <-m.stopChan:
-// 			return
-// 		case <-ticker.C:
-// 			if err := m.verifyFtUtxos(); err != nil {
-// 				log.Printf("验证FT-UTXO失败: %v", err)
-// 			}
-// 		}
-// 	}
-// }
+		// 收集一批数据
+		count := 0
+		for iter.First(); iter.Valid(); iter.Next() {
+			//key: outpoint
+			//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+			key := string(iter.Key())
+			value := string(iter.Value())
+			uncheckData[key] = value
+			count++
 
-// // verifyFtUtxos 验证FT-UTXO
-// func (m *FtVerifyManager) verifyFtUtxos() error {
-// 	// 获取所有需要验证的地址
-// 	addresses, err := m.getAllAddresses()
-// 	if err != nil {
-// 		return fmt.Errorf("获取地址列表失败: %w", err)
-// 	}
+			if count >= m.verifyBatchSize {
+				break
+			}
+		}
 
-// 	// 按批次处理地址
-// 	for i := 0; i < len(addresses); i += m.verifyBatchSize {
-// 		end := i + m.verifyBatchSize
-// 		if end > len(addresses) {
-// 			end = len(addresses)
-// 		}
+		if count >= m.verifyBatchSize {
+			break
+		}
+	}
 
-// 		batchAddresses := addresses[i:end]
-// 		if err := m.verifyAddressBatch(batchAddresses); err != nil {
-// 			log.Printf("验证地址批次失败: %v", err)
-// 			continue
-// 		}
-// 	}
+	//打印日志，uncheckData数量
+	log.Printf("验证FT-UTXO，uncheckData数量: %d", len(uncheckData))
+	if len(uncheckData) == 0 {
+		return nil
+	}
 
-// 	return nil
-// }
+	// 创建工作通道
+	utxoChan := make(chan struct {
+		key   string
+		value string
+	}, len(uncheckData))
+	resultChan := make(chan error, len(uncheckData))
 
-// // // getAllAddresses 获取所有需要验证的地址
-// // func (m *FtVerifyManager) getAllAddresses() ([]string, error) {
-// // 	// 从addressFtVerifyStore获取上次验证的进度
-// // 	verifyData, err := m.indexer.addressFtVerifyStore.Get([]byte("verify_progress"))
-// // 	if err != nil && err != storage.ErrNotFound {
-// // 		return nil, fmt.Errorf("获取验证进度失败: %w", err)
-// // 	}
+	// 启动工作协程
+	for i := 0; i < m.verifyWorkerCount; i++ {
+		go m.verifyWorker(utxoChan, resultChan)
+	}
 
-// // 	var startAddress string
-// // 	var verifyCount int64
-// // 	if err == nil {
-// // 		// 解析验证进度数据
-// // 		parts := strings.Split(string(verifyData), "@")
-// // 		if len(parts) >= 2 {
-// // 			startAddress = parts[0]
-// // 			verifyCount, _ = strconv.ParseInt(parts[1], 10, 64)
-// // 		}
-// // 	}
+	// 发送UTXO到工作通道
+	for key, value := range uncheckData {
+		utxoChan <- struct {
+			key   string
+			value string
+		}{key, value}
+	}
+	close(utxoChan)
 
-// // 	// 获取所有地址
-// // 	addresses := make([]string, 0)
-// // 	// iter := m.indexer.addressFtIncomeStore.NewIterator()
-// // 	// defer iter.Close()
+	// 收集结果
+	var errs []error
+	for i := 0; i < len(uncheckData); i++ {
+		if err := <-resultChan; err != nil {
+			errs = append(errs, err)
+		}
+	}
 
-// // 	// foundStart := startAddress == ""
-// // 	// for iter.First(); iter.Valid(); iter.Next() {
-// // 	// 	addr := string(iter.Key())
-// // 	// 	if !foundStart {
-// // 	// 		if addr == startAddress {
-// // 	// 			foundStart = true
-// // 	// 		} else {
-// // 	// 			continue
-// // 	// 		}
-// // 	// 	}
-// // 	// 	addresses = append(addresses, addr)
-// // 	// }
+	if len(errs) > 0 {
+		return fmt.Errorf("验证过程中出现错误: %v", errs)
+	}
+	return nil
+}
 
-// // 	m.currentAddress = startAddress
-// // 	m.verifyCount = verifyCount
-// // 	return addresses, nil
-// // }
+// verifyWorker 验证工作协程
+func (m *FtVerifyManager) verifyWorker(utxoChan <-chan struct {
+	key   string
+	value string
+}, resultChan chan<- error) {
+	for utxo := range utxoChan {
+		if err := m.verifyUtxo(utxo.key, utxo.value); err != nil {
+			resultChan <- fmt.Errorf("验证UTXO失败: %w", err)
+			continue
+		}
+		resultChan <- nil
+	}
+}
 
-// // verifyAddressBatch 验证一批地址的FT-UTXO
-// func (m *FtVerifyManager) verifyAddressBatch(addresses []string) error {
-// 	// 创建工作通道
-// 	addressChan := make(chan string, len(addresses))
-// 	resultChan := make(chan error, len(addresses))
+// verifyUtxo 验证单个UTXO
+func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
+	// 解析outpoint获取txId
+	txId := strings.Split(outpoint, ":")[0]
 
-// 	// 启动工作协程
-// 	for i := 0; i < m.verifyWorkerCount; i++ {
-// 		go m.verifyWorker(addressChan, resultChan)
-// 	}
+	// 从usedFtIncomeStore获取使用该UTXO的交易
+	usedData, err := m.indexer.usedFtIncomeStore.Get([]byte(txId))
+	if err != nil {
+		if err == storage.ErrNotFound {
+			// 如果找不到使用记录，说明UTXO未被使用，可以删除
+			return m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
+		}
+		return err
+	}
 
-// 	// 发送地址到工作通道
-// 	for _, addr := range addresses {
-// 		addressChan <- addr
-// 	}
-// 	close(addressChan)
+	// 解析UTXO数据
+	//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+	utxoParts := strings.Split(utxoData, "@")
+	if len(utxoParts) < 9 {
+		return fmt.Errorf("无效的UTXO数据格式: %s", utxoData)
+	}
 
-// 	// 收集结果
-// 	var errs []error
-// 	for i := 0; i < len(addresses); i++ {
-// 		if err := <-resultChan; err != nil {
-// 			errs = append(errs, err)
-// 		}
-// 	}
+	// 获取UTXO的关键信息
+	ftAddress := utxoParts[0]
+	codeHash := utxoParts[1]
+	genesis := utxoParts[2]
+	sensibleId := utxoParts[3]
 
-// 	if len(errs) > 0 {
-// 		return fmt.Errorf("验证过程中出现错误: %v", errs)
-// 	}
-// 	return nil
-// }
+	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(sensibleId)
+	if err != nil {
+		return err
+	}
+	tokenHash := ""
+	tokenCodeHash := ""
+	genesisHash := ""
+	genesisCodeHash := ""
 
-// // verifyWorker 验证工作协程
-// func (m *FtVerifyManager) verifyWorker(addressChan <-chan string, resultChan chan<- error) {
-// 	for addr := range addressChan {
-// 		if err := m.verifyAddress(addr); err != nil {
-// 			resultChan <- fmt.Errorf("验证地址 %s 失败: %w", addr, err)
-// 			continue
-// 		}
-// 		resultChan <- nil
-// 	}
-// }
+	usedOutpoint := genesisTxId + ":" + strconv.Itoa(int(genesisIndex))
 
-// // verifyAddress 验证单个地址的FT-UTXO
-// func (m *FtVerifyManager) verifyAddress(address string) error {
-// 	// 从addressFtIncomeStore获取UTXO数据
-// 	utxoData, err := m.indexer.addressFtIncomeStore.Get([]byte(address))
-// 	if err != nil {
-// 		if err == storage.ErrNotFound {
-// 			return nil
-// 		}
-// 		return err
-// 	}
+	//从contractFtGenesisStore获取初始创世UTXO
+	genesisUtxo, err := m.indexer.contractFtGenesisStore.Get([]byte(usedOutpoint))
+	if err != nil {
+		return err
+	}
+	if len(genesisUtxo) > 0 {
+		//如果有，就从contractFtGenesisOutputStore里面获取
+		// key:usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
+		genesisOutputs, err := m.indexer.contractFtGenesisOutputStore.Get([]byte(usedOutpoint))
+		if err != nil {
+			return err
+		}
+		if len(genesisOutputs) > 0 {
+			genesisOutputParts := strings.Split(string(genesisOutputs), ",")
+			for _, genesisOutput := range genesisOutputParts {
+				if genesisOutput == "" {
+					continue
+				}
+				//sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value
+				genesisOutputParts := strings.Split(genesisOutput, "@")
+				if len(genesisOutputParts) < 10 {
+					continue
+				}
+				/*
+									 // token
+					            if (txOutFtEntity.codeHash === txOutFt.codeHash) {
+					              tokenHash = txOutFtEntity.genesis;
+					              tokenCodeHash = txOutFtEntity.codeHash;
+					              sensibleId = txOutFtEntity.sensibleId;
+					            }
+					            // new genesis
+					            if (txOutFtEntity.value === '0') {
+					              genesisHash = txOutFtEntity.genesis;
+					              genesisCodeHash = txOutFtEntity.codeHash;
+					              sensibleId = txOutFtEntity.sensibleId;
+					            }
+				*/
+				if genesisOutputParts[4] == codeHash {
+					tokenHash = genesisOutputParts[5]
+					tokenCodeHash = genesisOutputParts[4]
+					sensibleId = genesisOutputParts[0]
+				}
+				if genesisOutputParts[6] == "0" {
+					genesisHash = genesisOutputParts[5]
+					genesisCodeHash = genesisOutputParts[4]
+					sensibleId = genesisOutputParts[0]
+				}
+			}
+		}
+	}
 
-// 	// 解析UTXO数据
-// 	utxos := strings.Split(string(utxoData), ",")
-// 	validUtxos := make([]string, 0, len(utxos))
+	// 解析使用记录
+	usedList := strings.Split(string(usedData), ",")
+	for _, used := range usedList {
+		if used == "" {
+			continue
+		}
 
-// 	// 验证每个UTXO
-// 	for _, utxo := range utxos {
-// 		if utxo == "" {
-// 			continue
-// 		}
+		//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+		usedParts := strings.Split(used, "@")
+		if len(usedParts) < 9 {
+			continue
+		}
 
-// 		if m.isValidUtxo(utxo) {
-// 			validUtxos = append(validUtxos, utxo)
-// 		}
-// 		m.verifyCount++
-// 	}
+		/*
+					if (usedTxo && usedTxo.length > 0) {
+			      for (const txo of usedTxo) {
+			        if (
+			          (txo.genesis == txOut.genesis &&
+			            txo.codeHash == txOut.codeHash &&
+			            txo.sensibleId == txOut.sensibleId) ||
+			          (txo.genesis == tokenHash &&
+			            txo.codeHash == tokenCodeHash &&
+			            txo.sensibleId === sensibleId) ||
+			          (txo.genesis == genesisHash &&
+			            txo.codeHash == genesisCodeHash &&
+			            txo.sensibleId === sensibleId) ||
+			          txo.txid == genesisTxId
+			        ) {
+			          return true;
+			        }
+			      }
+			    }
+			    return false;
+		*/
 
-// 	// 将有效的UTXO存储到addressFtIncomeValidStore
-// 	if len(validUtxos) > 0 {
-// 		validData := strings.Join(validUtxos, ",")
-// 		if err := m.indexer.addressFtIncomeValidStore.Set([]byte(address), []byte(validData)); err != nil {
-// 			return fmt.Errorf("存储有效UTXO失败: %w", err)
-// 		}
-// 	}
+		// 检查codeHash、genesis和sensibleId是否匹配
+		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == sensibleId {
+			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
+			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
+				return err
+			}
+			break
+		}
+		if usedParts[1] == tokenCodeHash && usedParts[2] == tokenHash && usedParts[3] == sensibleId {
+			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
+			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
+				return err
+			}
+			break
+		}
+		if usedParts[1] == genesisCodeHash && usedParts[2] == genesisHash && usedParts[3] == sensibleId {
+			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
+			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
+				return err
+			}
+			break
+		}
+	}
 
-// 	// 更新验证进度
-// 	progressData := fmt.Sprintf("%s@%d@%d", address, m.verifyCount, time.Now().Unix())
-// 	if err := m.indexer.addressFtVerifyStore.Set([]byte("verify_progress"), []byte(progressData)); err != nil {
-// 		return fmt.Errorf("更新验证进度失败: %w", err)
-// 	}
+	// 删除已验证的UTXO
+	return m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
+}
 
-// 	return nil
-// }
+// addToValidStore 添加UTXO到有效存储
+func (m *FtVerifyManager) addToValidStore(ftAddress, utxoData string) error {
+	// 获取现有的有效UTXO数据
+	//key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
+	existingData, err := m.indexer.addressFtIncomeValidStore.Get([]byte(ftAddress))
+	if err != nil && err != storage.ErrNotFound {
+		return err
+	}
 
-// // isValidUtxo 验证UTXO是否有效
-// func (m *FtVerifyManager) isValidUtxo(utxo string) bool {
-// 	// TODO: 实现UTXO验证逻辑
-// 	// 1. 解析UTXO数据
-// 	// 2. 检查UTXO是否满足验证条件
-// 	// 3. 返回验证结果
-// 	return false
-// }
+	// 从 utxoData 中提取 txId 和 index
+	//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+	utxoParts := strings.Split(utxoData, "@")
+	if len(utxoParts) < 9 {
+		return fmt.Errorf("无效的UTXO数据格式: %s", utxoData)
+	}
+	txId := utxoParts[5]  // txId 在第6个位置
+	index := utxoParts[6] // index 在第7个位置
+	currentOutpoint := txId + ":" + index
+
+	var validUtxos []string
+	if err == nil {
+		validUtxos = strings.Split(string(existingData), ",")
+		// 检查是否已存在相同的 UTXO
+		for _, existingUtxo := range validUtxos {
+			if existingUtxo == "" {
+				continue
+			}
+			//value: CodeHash@Genesis@Amount@TxID@Index@Value@height
+			existingParts := strings.Split(existingUtxo, "@")
+			if len(existingParts) < 7 {
+				continue
+			}
+			existingTxId := existingParts[3]
+			existingIndex := existingParts[4]
+			existingOutpoint := existingTxId + ":" + existingIndex
+
+			if existingOutpoint == currentOutpoint {
+				// 已存在相同的 UTXO，直接返回
+				return nil
+			}
+		}
+	}
+
+	// 添加新的UTXO
+	validUtxos = append(validUtxos, utxoData)
+
+	// 更新存储
+	return m.indexer.addressFtIncomeValidStore.Set([]byte(ftAddress), []byte(strings.Join(validUtxos, ",")))
+}

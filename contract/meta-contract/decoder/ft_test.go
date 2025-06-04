@@ -195,3 +195,27 @@ func TestGetContractType(t *testing.T) {
 		fmt.Printf("ContractType: Unknown\n")
 	}
 }
+
+func TestParseSensibleId(t *testing.T) {
+	// 测试用例1: 有效的sensibleId
+	sensibleId := "3e04f81d7fa7d4d606c3c4c8e8d3a8dcf58b5808740d40a445f3884e126bc7fd00000000"
+	genesisTxId, genesisOutputIndex, err := ParseSensibleId(sensibleId)
+	if err != nil {
+		t.Fatalf("解析sensibleId失败: %v", err)
+	}
+	fmt.Printf("genesisTxId:%s, genesisOutputIndex:%d\n", genesisTxId, genesisOutputIndex)
+
+	// 测试用例2: 无效的sensibleId长度
+	invalidSensibleId := "e7ef8491aa1d7a3874c7c8eff7edfe07d24145bfc7c2d4f4ef948a6a375d3bbd"
+	_, _, err = ParseSensibleId(invalidSensibleId)
+	if err == nil {
+		t.Error("期望解析无效的sensibleId会返回错误，但没有")
+	}
+
+	// 测试用例3: 无效的hex字符串
+	invalidHexSensibleId := "invalid_hex_string"
+	_, _, err = ParseSensibleId(invalidHexSensibleId)
+	if err == nil {
+		t.Error("期望解析无效的hex字符串会返回错误，但没有")
+	}
+}

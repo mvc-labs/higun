@@ -16,18 +16,20 @@ import (
 )
 
 type ContractFtIndexer struct {
-	contractFtUtxoStore  *storage.PebbleStore // 存储合约Utxo数据 key: txID, value:FtAddress@CodeHash@Genesis@Amount@Index@Value@height@contractType,...
+	contractFtUtxoStore  *storage.PebbleStore // 存储合约Utxo数据 key: txID, value:FtAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value@height@contractType,...
 	addressFtIncomeStore *storage.PebbleStore // 存储地址相关的FT合约Utxo数据  key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
 	addressFtSpendStore  *storage.PebbleStore // 存储已使用的FT合约Utxo数据  key: FtAddress, value: txid@index@codeHash@genesis@amount@value@height@usedTxId,...
 
-	contractFtInfoStore          *storage.PebbleStore // 存储合约信息 key:codeHash@genesis, value: sensibleId@name@symbol@decimal
-	contractFtGenesisStore       *storage.PebbleStore // 存储合约创世信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis
-	contractFtGenesisOutputStore *storage.PebbleStore // 存储使用合约创世输出信息 key:txID, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value,...
-	contractFtGenesisUtxoStore   *storage.PebbleStore // 存储合约创世UTXO信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value{@IsSpent}
+	contractFtInfoStore    *storage.PebbleStore // 存储合约信息 key:codeHash@genesis, value: sensibleId@name@symbol@decimal
+	contractFtGenesisStore *storage.PebbleStore // 存储合约创世信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis
+	// contractFtGenesisOutputStore *storage.PebbleStore // 存储使用合约创世输出信息 key:txID, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value,...
+	contractFtGenesisOutputStore *storage.PebbleStore // 存储使用合约创世输出信息 key:usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
+
+	contractFtGenesisUtxoStore *storage.PebbleStore // 存储合约创世UTXO信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value{@IsSpent}
 
 	addressFtIncomeValidStore *storage.PebbleStore // 存储地址相关的FT合约Utxo数据  key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
-	uncheckFtOutpointStore    *storage.PebbleStore // 存储未检查的FT合约Utxo数据  key: outpoint, value: FtAddress@CodeHash@Genesis@Amount@TxID@Index@Value@height
-	usedFtIncomeStore         *storage.PebbleStore // 存储已使用的FT合约Utxo数据  key: UsedtxID, value: FtAddress@CodeHash@Genesis@Amount@TxID@Index@Value@height,...
+	uncheckFtOutpointStore    *storage.PebbleStore // 存储未检查的FT合约Utxo数据  key: outpoint, value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+	usedFtIncomeStore         *storage.PebbleStore // 存储已使用的FT合约Utxo数据  key: UsedtxID, value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height,...
 
 	uniqueFtIncomeStore *storage.PebbleStore // 存储unique合约UTXO数据 key:codeHash@genesis, value: TxID@Index@Value@sensibleId@customData@height,...
 	uniqueFtSpendStore  *storage.PebbleStore // 存储unique合约UTXO数据 key:codeHash@genesis, value: TxID@Index@usedTxId,...
@@ -170,8 +172,8 @@ func (i *ContractFtIndexer) indexContractFtOutputs(block *ContractFtBlock) error
 			tx := block.Transactions[i]
 			for _, out := range tx.Outputs {
 				// 处理合约UTXO存储
-				//key: txID, value:FtAddress@CodeHash@Genesis@Amount@Index@Value@height@contractType
-				contractFtUtxoMap[tx.ID] = append(contractFtUtxoMap[tx.ID], common.ConcatBytesOptimized([]string{out.FtAddress, out.CodeHash, out.Genesis, out.Amount, strconv.Itoa(int(out.Index)), out.Value, strconv.FormatInt(out.Height, 10), out.ContractType}, "@"))
+				//key: txID, value:FtAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value@height@contractType
+				contractFtUtxoMap[tx.ID] = append(contractFtUtxoMap[tx.ID], common.ConcatBytesOptimized([]string{out.FtAddress, out.CodeHash, out.Genesis, out.SensibleId, out.Amount, strconv.Itoa(int(out.Index)), out.Value, strconv.FormatInt(out.Height, 10), out.ContractType}, "@"))
 
 				if out.ContractType == "ft" {
 					hasFt = true
@@ -182,7 +184,7 @@ func (i *ContractFtIndexer) indexContractFtOutputs(block *ContractFtBlock) error
 						ftInfoMap[ftInfoKey] = common.ConcatBytesOptimized([]string{out.SensibleId, out.Name, out.Symbol, strconv.FormatUint(uint64(out.Decimal), 10)}, "@")
 					}
 
-					// 处理创世UTXO存储
+					// 处理初始创世UTXO存储
 					// key: outpoint, value: sensibleId@name@symobl@decimal@codeHash@genesis
 					if out.SensibleId == "000000000000000000000000000000000000000000000000000000000000000000000000" {
 						genesisKey := common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(int(out.Index))}, ":")
@@ -191,7 +193,7 @@ func (i *ContractFtIndexer) indexContractFtOutputs(block *ContractFtBlock) error
 						}
 					}
 
-					// 处理创世UTXO记录
+					// 处理新创世UTXO记录
 					// key: outpoint, value: sensibleId@name@symobl@decimal@codeHash@genesis@amount@index@value
 					if out.Amount == "0" {
 						genesisUtxoKey := common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(int(out.Index))}, ":")
@@ -208,10 +210,10 @@ func (i *ContractFtIndexer) indexContractFtOutputs(block *ContractFtBlock) error
 					addressFtUtxoMap[out.FtAddress] = append(addressFtUtxoMap[out.FtAddress], common.ConcatBytesOptimized([]string{out.CodeHash, out.Genesis, out.Amount, tx.ID, strconv.Itoa(int(out.Index)), out.Value, strconv.FormatInt(out.Height, 10)}, "@"))
 
 					// 处理未检查的FT合约Utxo存储
-					// key: outpoint, value: FtAddress@CodeHash@Genesis@Amount@TxID@Index@Value@height
+					// key: outpoint, value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
 					outpoint := common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(int(out.Index))}, ":")
 					if _, exists := uncheckFtOutpointMap[outpoint]; !exists {
-						uncheckFtOutpointMap[outpoint] = common.ConcatBytesOptimized([]string{out.FtAddress, out.CodeHash, out.Genesis, out.Amount, tx.ID, strconv.Itoa(int(out.Index)), out.Value, strconv.FormatInt(out.Height, 10)}, "@")
+						uncheckFtOutpointMap[outpoint] = common.ConcatBytesOptimized([]string{out.FtAddress, out.CodeHash, out.Genesis, out.SensibleId, out.Amount, tx.ID, strconv.Itoa(int(out.Index)), out.Value, strconv.FormatInt(out.Height, 10)}, "@")
 					}
 
 				} else if out.ContractType == "unique" {
@@ -347,19 +349,19 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 		for k, vList := range addressFtResult {
 			for _, v := range vList {
 				//k: FtAddress
-				//v: txid@index@codeHash@genesis@amount@value@height@usedTxId
+				//v: txid@index@codeHash@genesis@sensibleId@amount@value@height@usedTxId
 				vStrs := strings.Split(v, "@")
-				if len(vStrs) != 8 {
+				if len(vStrs) != 9 {
 					fmt.Println("处理addressFtResult invalid vStrs: ", vStrs)
 					continue
 				}
 				//newKey: usedTxId
-				//newValue: FtAddress@CodeHash@Genesis@Amount@TxID@Index@Value@height,...
-				usedTxId := vStrs[7]
+				//newValue: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height,...
+				usedTxId := vStrs[8]
 				if _, exists := usedFtIncomeMap[usedTxId]; !exists {
 					usedFtIncomeMap[usedTxId] = make([]string, 0)
 				}
-				newValue := common.ConcatBytesOptimized([]string{k, vStrs[2], vStrs[3], vStrs[4], vStrs[0], vStrs[1], vStrs[5], vStrs[6]}, "@")
+				newValue := common.ConcatBytesOptimized([]string{k, vStrs[2], vStrs[3], vStrs[4], vStrs[5], vStrs[0], vStrs[1], vStrs[6], vStrs[7]}, "@")
 				usedFtIncomeMap[usedTxId] = append(usedFtIncomeMap[usedTxId], newValue)
 			}
 		}
@@ -384,8 +386,11 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 		// key: txID, value: sensibleId@name@symobl@decimal@codeHash@genesis@amount@index@value,...
 		if len(usedGenesisUtxoMap) > 0 {
 			genesisOutputMap := make(map[string]string)
-			for txPoint, _ := range usedGenesisUtxoMap {
-				txID := strings.Split(txPoint, ":")[0]
+			for usedTxPoint, _ := range usedGenesisUtxoMap {
+				if _, exists := txPointUsedMap[usedTxPoint]; !exists {
+					continue
+				}
+				txID := txPointUsedMap[usedTxPoint]
 				var tx *ContractFtTransaction
 				for _, v := range block.Transactions {
 					if v.ID == txID {
@@ -400,6 +405,7 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 				// 收集该交易的所有输出信息
 				var outputs []string
 				for x, out := range tx.Outputs {
+					//key: usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
 					outputInfo := common.ConcatBytesOptimized([]string{
 						out.SensibleId,
 						out.Name,
@@ -408,16 +414,22 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 						out.CodeHash,
 						out.Genesis,
 						out.Amount,
+						txID,
 						strconv.Itoa(x),
 						out.Value,
 					}, "@")
 					outputs = append(outputs, outputInfo)
 				}
-				genesisOutputMap[tx.ID] = strings.Join(outputs, ",")
+				genesisOutputMap[usedTxPoint] = strings.Join(outputs, ",")
 			}
 			if err := i.contractFtGenesisOutputStore.BulkMergeConcurrent(&genesisOutputMap, workers); err != nil {
 				return err
 			}
+
+			for k := range genesisOutputMap {
+				delete(genesisOutputMap, k)
+			}
+			genesisOutputMap = nil
 		}
 
 		for k := range addressFtResult {
@@ -429,9 +441,13 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 		for k := range usedFtIncomeMap {
 			delete(usedFtIncomeMap, k)
 		}
+		for k := range txPointUsedMap {
+			delete(txPointUsedMap, k)
+		}
 		addressFtResult = nil
 		uniqueFtResult = nil
 		usedFtIncomeMap = nil
+		txPointUsedMap = nil
 		batchPoints = nil
 	}
 

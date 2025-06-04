@@ -172,6 +172,15 @@ func main() {
 		uniqueFtSpendStore,
 		metaStore)
 
+	// 创建并启动FT验证管理器
+	verifyManager := indexer.NewFtVerifyManager(idx, 1*time.Minute, 1000, params.WorkerCount)
+	if err := verifyManager.Start(); err != nil {
+		log.Printf("启动FT验证管理器失败: %v", err)
+	} else {
+		log.Println("FT验证管理器已启动")
+	}
+	defer verifyManager.Stop()
+
 	// 获取当前区块链高度
 	bestHeight, err := bcClient.GetBlockCount()
 	if err != nil {

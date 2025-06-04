@@ -732,7 +732,7 @@ func (s *PebbleStore) QueryFtUTXOAddresses(outpoints *[]string, concurrency int,
 		}
 		if r.valueData != "" {
 			//key: txid:output_index
-			//value: FtAddress@CodeHash@Genesis@Amount@Index@Value@height@contractType
+			//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value@height@contractType
 			resultInfo, err := getFtAddressByStr(r.key, r.valueData)
 			if err != nil {
 				finalErr = err
@@ -752,7 +752,7 @@ func (s *PebbleStore) QueryFtUTXOAddresses(outpoints *[]string, concurrency int,
 			return nil, nil, fmt.Errorf("invalid kStrs: %s", kStrs)
 		}
 		vStrs := strings.Split(v, "@")
-		if len(vStrs) != 8 {
+		if len(vStrs) != 9 {
 			return nil, nil, fmt.Errorf("invalid vStrs: %s", vStrs)
 		}
 		usedTxId := ""
@@ -760,13 +760,13 @@ func (s *PebbleStore) QueryFtUTXOAddresses(outpoints *[]string, concurrency int,
 			usedTxId = usedValue
 		}
 
-		if vStrs[7] == "ft" {
+		if vStrs[8] == "ft" {
 			// key: FtAddress
-			// value: txid@index@codeHash@genesis@amount@value@height@usedTxId
+			// value: txid@index@codeHash@genesis@sensibleId@amount@value@height@usedTxId
 			finalResultKey := vStrs[0] //key: FtAddress
-			finalResultValue := kStrs[0] + "@" + kStrs[1] + "@" + vStrs[1] + "@" + vStrs[2] + "@" + vStrs[3] + "@" + vStrs[5] + "@" + vStrs[6] + "@" + usedTxId
+			finalResultValue := kStrs[0] + "@" + kStrs[1] + "@" + vStrs[1] + "@" + vStrs[2] + "@" + vStrs[3] + "@" + vStrs[5] + "@" + vStrs[6] + "@" + vStrs[7] + "@" + usedTxId
 			finalFtResults[finalResultKey] = append(finalFtResults[finalResultKey], finalResultValue)
-		} else if vStrs[7] == "unique" {
+		} else if vStrs[8] == "unique" {
 			// key: codeHash@genesis
 			// value: txid@index@usedTxId
 			finalResultKey := vStrs[1] + "@" + vStrs[2] //key: codeHash@genesis
@@ -792,10 +792,10 @@ func getFtAddressByStr(key, results string) (string, error) {
 	// fmt.Printf("[getFtAddressByStr]key: %s, results: %s\n", key, results)
 	for _, valueInfo := range valueInfoList {
 		arr := strings.Split(valueInfo, "@")
-		if len(arr) != 8 {
+		if len(arr) != 9 {
 			continue
 		}
-		if arr[4] == info[1] {
+		if arr[5] == info[1] {
 			targetValueInfo = valueInfo
 			break
 		}
@@ -806,7 +806,7 @@ func getFtAddressByStr(key, results string) (string, error) {
 	}
 
 	targetArr := strings.Split(targetValueInfo, "@")
-	if len(targetArr) != 8 {
+	if len(targetArr) != 9 {
 		return "", fmt.Errorf("invalid targetArr: %s", targetArr)
 	}
 	return targetValueInfo, nil
