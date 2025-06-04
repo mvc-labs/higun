@@ -185,12 +185,13 @@ func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) error {
 	for i, out := range tx.TxOut {
 		pkScriptStr := hex.EncodeToString(out.PkScript)
 
-		// 解析FT相关信息
-		ftInfo, err := blockchain.ParseFtInfo(pkScriptStr, m.chainCfg)
+		ftInfo, uniqueUtxoInfo, contractTypeStr, err := blockchain.ParseContractFtInfo(pkScriptStr, m.chainCfg)
 		if err != nil {
-			fmt.Println("[Mempool] ParseFtInfo error", err)
-			continue
+			fmt.Println("ParseFtInfo error", err)
+			return nil
 		}
+		_ = uniqueUtxoInfo
+		_ = contractTypeStr
 		if ftInfo == nil {
 			continue
 		}
@@ -432,7 +433,7 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 		var outputs []string
 		for i, out := range tx.TxOut {
 			pkScriptStr := hex.EncodeToString(out.PkScript)
-			ftInfo, err := blockchain.ParseFtInfo(pkScriptStr, m.chainCfg)
+			ftInfo, _, _, err := blockchain.ParseContractFtInfo(pkScriptStr, m.chainCfg)
 			if err != nil || ftInfo == nil {
 				continue
 			}
@@ -558,7 +559,7 @@ func (m *FtMempoolManager) CleanByHeight(height int, bcClient interface{}) error
 			amount := strconv.FormatInt(int64(math.Round(out.Value*1e8)), 10)
 
 			// 解析FT相关信息
-			ftInfo, err := blockchain.ParseFtInfo(out.ScriptPubKey.Hex, m.chainCfg)
+			ftInfo, _, _, err := blockchain.ParseContractFtInfo(out.ScriptPubKey.Hex, m.chainCfg)
 			if err != nil {
 				return nil
 			}

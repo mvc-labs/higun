@@ -145,6 +145,7 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 	txCount := len(block.Tx)
 	maxTxPerBatch := c.GetMaxTxPerBatch()
 
+	t3 := time.Now()
 	if txCount > maxTxPerBatch {
 		fmt.Printf("\n大区块处理: 高度=%d, 交易数=%d, 超过最大批次大小=%d, 从RPC获取区块数据耗时: %v 秒, 将使用Channel进行分批处理\n",
 			height, txCount, maxTxPerBatch, t2.Sub(t1).Seconds())
@@ -219,6 +220,8 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 		}
 	}
 
+	t4 := time.Now()
+	fmt.Printf("\n处理区块 %d 耗时: %v 秒\n", height, t4.Sub(t3).Seconds())
 	return nil
 }
 
@@ -256,33 +259,58 @@ func (c *FtClient) convertBlock(block *btcjson.GetBlockVerboseTxResult, height i
 				amount := strconv.FormatInt(int64(math.Round(out.Value*1e8)), 10)
 
 				// 解析FT相关信息
-				ftInfo, err := ParseFtInfo(out.ScriptPubKey.Hex, c.params)
+				var output *indexer.ContractFtOutput
+				ftInfo, uniqueUtxoInfo, contractTypeStr, err := ParseContractFtInfo(out.ScriptPubKey.Hex, c.params)
 				if err != nil {
 					fmt.Println("ParseFtInfo error", err)
 					continue
 				}
-				if ftInfo == nil {
+				if contractTypeStr == "ft" {
+					if ftInfo == nil {
+						continue
+					}
+					output = &indexer.ContractFtOutput{
+						ContractType: contractTypeStr,
+						Address:      address,
+						Value:        amount,
+						Index:        int64(k),
+						Height:       int64(height),
+						CodeHash:     ftInfo.CodeHash,
+						Genesis:      ftInfo.Genesis,
+						SensibleId:   ftInfo.SensibleId,
+						Name:         ftInfo.Name,
+						Symbol:       ftInfo.Symbol,
+						Amount:       strconv.FormatUint(ftInfo.Amount, 10),
+						Decimal:      ftInfo.Decimal,
+						FtAddress:    ftInfo.Address,
+					}
+				} else if contractTypeStr == "unique" {
+					if uniqueUtxoInfo == nil {
+						continue
+					}
+					output = &indexer.ContractFtOutput{
+						ContractType: contractTypeStr,
+						Address:      address,
+						Value:        amount,
+						Index:        int64(k),
+						Height:       int64(height),
+						CodeHash:     uniqueUtxoInfo.CodeHash,
+						Genesis:      uniqueUtxoInfo.Genesis,
+						SensibleId:   uniqueUtxoInfo.SensibleId,
+						CustomData:   uniqueUtxoInfo.CustomData,
+					}
+				} else {
 					continue
 				}
-
-				outputs = append(outputs, &indexer.ContractFtOutput{
-					Address:    address,
-					Value:      amount,
-					Index:      int64(k),
-					CodeHash:   ftInfo.CodeHash,
-					Genesis:    ftInfo.Genesis,
-					SensibleId: ftInfo.SensibleId,
-					Name:       ftInfo.Name,
-					Symbol:     ftInfo.Symbol,
-					Amount:     strconv.FormatUint(ftInfo.Amount, 10),
-					Decimal:    ftInfo.Decimal,
-					FtAddress:  ftInfo.Address,
-				})
+				if output == nil {
+					continue
+				}
+				outputs = append(outputs, output)
 
 				if find := contractFtOutputs[address]; find != nil {
-					contractFtOutputs[address] = append(find, outputs[k])
+					contractFtOutputs[address] = append(find, output)
 				} else {
-					contractFtOutputs[address] = []*indexer.ContractFtOutput{outputs[k]}
+					contractFtOutputs[address] = []*indexer.ContractFtOutput{output}
 				}
 			}
 
@@ -338,27 +366,51 @@ func (c *FtClient) convertBlock(block *btcjson.GetBlockVerboseTxResult, height i
 			amount := strconv.FormatInt(int64(math.Round(out.Value*1e8)), 10)
 
 			// 解析FT相关信息
-			ftInfo, err := ParseFtInfo(out.ScriptPubKey.Hex, c.params)
+			ftInfo, uniqueUtxoInfo, contractTypeStr, err := ParseContractFtInfo(out.ScriptPubKey.Hex, c.params)
 			if err != nil {
 				fmt.Println("ParseFtInfo error", err)
 				return nil
 			}
-			if ftInfo == nil {
+			var output *indexer.ContractFtOutput
+			if contractTypeStr == "ft" {
+				if ftInfo == nil {
+					continue
+				}
+				output = &indexer.ContractFtOutput{
+					ContractType: contractTypeStr,
+					Address:      address,
+					Value:        amount,
+					Index:        int64(k),
+					Height:       int64(height),
+					CodeHash:     ftInfo.CodeHash,
+					Genesis:      ftInfo.Genesis,
+					SensibleId:   ftInfo.SensibleId,
+					Name:         ftInfo.Name,
+					Symbol:       ftInfo.Symbol,
+					Amount:       strconv.FormatUint(ftInfo.Amount, 10),
+					Decimal:      ftInfo.Decimal,
+					FtAddress:    ftInfo.Address,
+				}
+			} else if contractTypeStr == "unique" {
+				if uniqueUtxoInfo == nil {
+					continue
+				}
+				output = &indexer.ContractFtOutput{
+					ContractType: contractTypeStr,
+					Address:      address,
+					Value:        amount,
+					Index:        int64(k),
+					Height:       int64(height),
+					CodeHash:     uniqueUtxoInfo.CodeHash,
+					Genesis:      uniqueUtxoInfo.Genesis,
+					SensibleId:   uniqueUtxoInfo.SensibleId,
+					CustomData:   uniqueUtxoInfo.CustomData,
+				}
+			} else {
 				continue
 			}
-
-			output := &indexer.ContractFtOutput{
-				Address:    address,
-				Value:      amount,
-				CodeHash:   ftInfo.CodeHash,
-				Genesis:    ftInfo.Genesis,
-				SensibleId: ftInfo.SensibleId,
-				Name:       ftInfo.Name,
-				Symbol:     ftInfo.Symbol,
-				Amount:     strconv.FormatUint(ftInfo.Amount, 10),
-				Decimal:    ftInfo.Decimal,
-				FtAddress:  ftInfo.Address,
-				Index:      int64(k),
+			if output == nil {
+				continue
 			}
 			outputs = append(outputs, output)
 
@@ -413,27 +465,51 @@ func (c *FtClient) convertBlockBatch(block *btcjson.GetBlockVerboseTxResult, hei
 			amount := strconv.FormatInt(int64(math.Round(out.Value*1e8)), 10)
 
 			// 解析FT相关信息
-			ftInfo, err := ParseFtInfo(out.ScriptPubKey.Hex, c.params)
+			ftInfo, uniqueUtxoInfo, contractTypeStr, err := ParseContractFtInfo(out.ScriptPubKey.Hex, c.params)
 			if err != nil {
 				fmt.Println("ParseFtInfo error", err)
 				return nil
 			}
-			if ftInfo == nil {
+			var output *indexer.ContractFtOutput
+			if contractTypeStr == "ft" {
+				if ftInfo == nil {
+					continue
+				}
+				output = &indexer.ContractFtOutput{
+					ContractType: contractTypeStr,
+					Address:      address,
+					Value:        amount,
+					Index:        int64(k),
+					Height:       int64(height),
+					CodeHash:     ftInfo.CodeHash,
+					Genesis:      ftInfo.Genesis,
+					SensibleId:   ftInfo.SensibleId,
+					Name:         ftInfo.Name,
+					Symbol:       ftInfo.Symbol,
+					Amount:       strconv.FormatUint(ftInfo.Amount, 10),
+					Decimal:      ftInfo.Decimal,
+					FtAddress:    ftInfo.Address,
+				}
+			} else if contractTypeStr == "unique" {
+				if uniqueUtxoInfo == nil {
+					continue
+				}
+				output = &indexer.ContractFtOutput{
+					ContractType: contractTypeStr,
+					Address:      address,
+					Value:        amount,
+					Index:        int64(k),
+					Height:       int64(height),
+					CodeHash:     uniqueUtxoInfo.CodeHash,
+					Genesis:      uniqueUtxoInfo.Genesis,
+					SensibleId:   uniqueUtxoInfo.SensibleId,
+					CustomData:   uniqueUtxoInfo.CustomData,
+				}
+			} else {
 				continue
 			}
-
-			output := &indexer.ContractFtOutput{
-				Address:    address,
-				Value:      amount,
-				CodeHash:   ftInfo.CodeHash,
-				Genesis:    ftInfo.Genesis,
-				SensibleId: ftInfo.SensibleId,
-				Name:       ftInfo.Name,
-				Symbol:     ftInfo.Symbol,
-				Amount:     strconv.FormatUint(ftInfo.Amount, 10),
-				Decimal:    ftInfo.Decimal,
-				FtAddress:  ftInfo.Address,
-				Index:      int64(k),
+			if output == nil {
+				continue
 			}
 			outputs = append(outputs, output)
 
@@ -468,13 +544,32 @@ func (c *FtClient) GetMaxTxPerBatch() int {
 }
 
 // ParseFtInfo 从脚本中解析FT信息
-func ParseFtInfo(scriptHex string, params *chaincfg.Params) (*decoder.FTUtxoInfo, error) {
+func ParseContractFtInfo(scriptHex string, params *chaincfg.Params) (*decoder.FTUtxoInfo, *decoder.UniqueUtxoInfo, string, error) {
 	scriptBytes, err := hex.DecodeString(scriptHex)
 	if err != nil {
-		return nil, err
+		return nil, nil, "", err
 	}
 
-	return decoder.ExtractFTUtxoInfo(scriptBytes, params)
+	contractTypeStr := ""
+	contractType := decoder.GetContractType(scriptBytes)
+	if contractType == decoder.ContractTypeFT {
+		contractTypeStr = "ft"
+		ftUtxoInfo, err := decoder.ExtractFTUtxoInfo(scriptBytes, params)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		return ftUtxoInfo, nil, contractTypeStr, nil
+	} else if contractType == decoder.ContractTypeUnique {
+		contractTypeStr = "unique"
+		uniqueUtxoInfo, err := decoder.ExtractUniqueUtxoInfo(scriptBytes, params)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		return nil, uniqueUtxoInfo, contractTypeStr, nil
+	} else {
+		contractTypeStr = "unknown"
+		return nil, nil, contractTypeStr, nil
+	}
 }
 
 // func checkFtUtxoValid() bool {

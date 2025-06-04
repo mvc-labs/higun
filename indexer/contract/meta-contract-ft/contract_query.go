@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/storage"
 )
@@ -99,7 +100,9 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 
 	// 获取FT收入数据
 	data, _, err := i.addressFtIncomeStore.GetWithShard(addrKey)
+	fmt.Println("data", string(data))
 	if err != nil {
+		fmt.Println("err", err)
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, nil
 		}
@@ -445,6 +448,14 @@ func (i *ContractFtIndexer) GetDbFtUtxoByTx(tx string) ([]byte, error) {
 	return i.contractFtUtxoStore.Get([]byte(tx))
 }
 
+func (i *ContractFtIndexer) GetDbAddressFtIncomeByTx(address string) ([]byte, error) {
+	return i.addressFtIncomeStore.Get([]byte(address))
+}
+
+func (i *ContractFtIndexer) GetDbAddressFtSpendByTx(address string) ([]byte, error) {
+	return i.addressFtSpendStore.Get([]byte(address))
+}
+
 // GetFtInfo 获取FT信息
 func (i *ContractFtIndexer) GetFtInfo(key string) (*FtInfo, error) {
 	// 从contractFtInfoStore获取FT信息
@@ -453,12 +464,12 @@ func (i *ContractFtIndexer) GetFtInfo(key string) (*FtInfo, error) {
 		return nil, fmt.Errorf("获取FT信息失败: %w", err)
 	}
 
+	fmt.Println("data", string(data))
 	// 解析FT信息
 	parts := strings.Split(string(data), "@")
 	if len(parts) < 4 {
 		return nil, fmt.Errorf("FT信息格式错误")
 	}
-
 	decimal, err := strconv.ParseUint(parts[3], 10, 8)
 	if err != nil {
 		return nil, fmt.Errorf("解析decimal失败: %w", err)
@@ -497,4 +508,50 @@ func (i *ContractFtIndexer) GetMempoolFtUTXOs(address string, codeHash string, g
 		return nil, nil, fmt.Errorf("获取内存池UTXO失败: %w", err)
 	}
 	return
+}
+
+// GetAllDbAddressFtIncome 获取所有地址的 FT 收入数据
+func (i *ContractFtIndexer) GetAllDbAddressFtIncome() (map[string]string, error) {
+	result := make(map[string]string)
+
+	// 遍历所有分片
+	for _, db := range i.addressFtIncomeStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对
+		for iter.First(); iter.Valid(); iter.Next() {
+			key := string(iter.Key())
+			value := string(iter.Value())
+			result[key] = value
+		}
+	}
+
+	return result, nil
+}
+
+// GetAllDbAddressFtSpend 获取所有地址的 FT 支出数据
+func (i *ContractFtIndexer) GetAllDbAddressFtSpend() (map[string]string, error) {
+	result := make(map[string]string)
+
+	// 遍历所有分片
+	for _, db := range i.addressFtSpendStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对
+		for iter.First(); iter.Valid(); iter.Next() {
+			key := string(iter.Key())
+			value := string(iter.Value())
+			result[key] = value
+		}
+	}
+
+	return result, nil
 }

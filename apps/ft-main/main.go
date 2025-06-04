@@ -83,11 +83,35 @@ func main() {
 	}
 	defer contractFtGenesisUtxoStore.Close()
 
-	addressFtUtxoInvalidsStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeAddressFTUTXOInvalid, cfg.ShardCount)
+	addressFtIncomeValidStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeAddressFTIncomeValid, cfg.ShardCount)
 	if err != nil {
-		log.Fatalf("初始化无效FT UTXO存储失败: %v", err)
+		log.Fatalf("初始化有效address FT UTXO存储失败: %v", err)
 	}
-	defer addressFtUtxoInvalidsStore.Close()
+	defer addressFtIncomeValidStore.Close()
+
+	uncheckFtOutpointStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeUnCheckFtIncome, cfg.ShardCount)
+	if err != nil {
+		log.Fatalf("初始化FT验证存储失败: %v", err)
+	}
+	defer uncheckFtOutpointStore.Close()
+
+	usedFtIncomeStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeUsedFTIncome, cfg.ShardCount)
+	if err != nil {
+		log.Fatalf("初始化已使用的FT合约Utxo存储失败: %v", err)
+	}
+	defer usedFtIncomeStore.Close()
+
+	uniqueFtIncomeStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeUniqueFTIncome, cfg.ShardCount)
+	if err != nil {
+		log.Fatalf("初始化unique合约UTXO存储失败: %v", err)
+	}
+	defer uniqueFtIncomeStore.Close()
+
+	uniqueFtSpendStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeUniqueFTSpend, cfg.ShardCount)
+	if err != nil {
+		log.Fatalf("初始化unique合约UTXO存储失败: %v", err)
+	}
+	defer uniqueFtSpendStore.Close()
 
 	// 创建区块链客户端
 	bcClient, err := blockchain.NewFtClient(cfg)
@@ -141,7 +165,11 @@ func main() {
 		contractFtGenesisStore,
 		contractFtGenesisOutputStore,
 		contractFtGenesisUtxoStore,
-		addressFtUtxoInvalidsStore,
+		addressFtIncomeValidStore,
+		uncheckFtOutpointStore,
+		usedFtIncomeStore,
+		uniqueFtIncomeStore,
+		uniqueFtSpendStore,
 		metaStore)
 
 	// 获取当前区块链高度

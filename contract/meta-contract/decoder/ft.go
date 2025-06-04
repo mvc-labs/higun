@@ -22,6 +22,35 @@ type FTUtxoInfo struct {
 	Address    string
 }
 
+type UniqueUtxoInfo struct {
+	CodeType   uint32
+	CodeHash   string
+	GenesisId  string
+	Genesis    string
+	SensibleId string // GenesisTx outpoint
+	CustomData string // unique custom data
+}
+
+// ContractType 表示合约类型
+type ContractType int
+
+const (
+	ContractTypeUnknown ContractType = iota
+	ContractTypeFT
+	ContractTypeUnique
+)
+
+// GetContractType 判断脚本类型
+func GetContractType(script []byte) ContractType {
+	if IsFTContract(script) {
+		return ContractTypeFT
+	}
+	if IsUniqueContract(script) {
+		return ContractTypeUnique
+	}
+	return ContractTypeUnknown
+}
+
 // IsFTContract 检查是否是 FT 合约
 func IsFTContract(script []byte) bool {
 	txoData := &scriptDecoder.TxoData{}
@@ -30,6 +59,16 @@ func IsFTContract(script []byte) bool {
 		return false
 	}
 	return txoData.CodeType == scriptDecoder.CodeType_FT
+}
+
+// IsUniqueContract 检查是否是 Unique 合约
+func IsUniqueContract(script []byte) bool {
+	txoData := &scriptDecoder.TxoData{}
+	isValid := scriptDecoder.DecodeMvcTxo(script, txoData)
+	if !isValid {
+		return false
+	}
+	return txoData.CodeType == scriptDecoder.CodeType_UNIQUE
 }
 
 // ExtractFTInfo 提取 FT 合约信息
@@ -101,4 +140,47 @@ func PkhToAddress(pkh string, params *chaincfg.Params) (string, error) {
 	}
 
 	return addr.String(), nil
+}
+
+// ExtractFTInfo 提取 FT 合约信息
+func ExtractUniqueInfo(script []byte) (*scriptDecoder.TxoData, error) {
+	txoData := &scriptDecoder.TxoData{}
+	isValid := scriptDecoder.DecodeMvcTxo(script, txoData)
+	if !isValid || txoData.CodeType != scriptDecoder.CodeType_UNIQUE {
+		return nil, nil
+	}
+	return txoData, nil
+}
+
+func ExtractUniqueUtxoInfo(script []byte, param *chaincfg.Params) (*UniqueUtxoInfo, error) {
+	txoData, err := ExtractUniqueInfo(script)
+	if err != nil {
+		return nil, err
+	}
+	if txoData == nil {
+		return nil, nil
+	}
+
+	if txoData.Uniq == nil {
+		return nil, nil
+	}
+
+	// 转换为UniqueUtxoInfo结构
+	uniqueUtxoInfo := &UniqueUtxoInfo{
+		CodeType:   txoData.CodeType,
+		CodeHash:   hex.EncodeToString(txoData.CodeHash[:]),
+		GenesisId:  hex.EncodeToString(txoData.GenesisId[:]),
+		SensibleId: hex.EncodeToString(txoData.Uniq.SensibleId),
+		CustomData: hex.EncodeToString(txoData.Uniq.CustomData),
+	}
+
+	// 根据GenesisIdLen设置Genesis字段
+	if txoData.GenesisIdLen == 40 {
+		// 如果GenesisIdLen为40，则后20字节是genesis
+		uniqueUtxoInfo.Genesis = hex.EncodeToString(txoData.GenesisId[20:])
+	} else if txoData.GenesisIdLen == 20 {
+		// 如果GenesisIdLen为20，则整个GenesisId就是genesis
+		uniqueUtxoInfo.Genesis = hex.EncodeToString(txoData.GenesisId[:20])
+	}
+	return uniqueUtxoInfo, nil
 }
