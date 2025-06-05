@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mattn/go-colorable"
 	"github.com/metaid/utxo_indexer/common"
@@ -15,17 +16,19 @@ import (
 	"github.com/schollz/progressbar/v3"
 )
 
+var (
+	lastLogTime time.Time
+)
+
 type ContractFtIndexer struct {
 	contractFtUtxoStore  *storage.PebbleStore // 存储合约Utxo数据 key: txID, value:FtAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value@height@contractType,...
 	addressFtIncomeStore *storage.PebbleStore // 存储地址相关的FT合约Utxo数据  key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
 	addressFtSpendStore  *storage.PebbleStore // 存储已使用的FT合约Utxo数据  key: FtAddress, value: txid@index@codeHash@genesis@amount@value@height@usedTxId,...
 
-	contractFtInfoStore    *storage.PebbleStore // 存储合约信息 key:codeHash@genesis, value: sensibleId@name@symbol@decimal
-	contractFtGenesisStore *storage.PebbleStore // 存储合约创世信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis
-	// contractFtGenesisOutputStore *storage.PebbleStore // 存储使用合约创世输出信息 key:txID, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value,...
+	contractFtInfoStore          *storage.PebbleStore // 存储合约信息 key:codeHash@genesis, value: sensibleId@name@symbol@decimal
+	contractFtGenesisStore       *storage.PebbleStore // 存储合约创世信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis
 	contractFtGenesisOutputStore *storage.PebbleStore // 存储使用合约创世输出信息 key:usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
-
-	contractFtGenesisUtxoStore *storage.PebbleStore // 存储合约创世UTXO信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value{@IsSpent}
+	contractFtGenesisUtxoStore   *storage.PebbleStore // 存储合约创世UTXO信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value{@IsSpent}
 
 	addressFtIncomeValidStore *storage.PebbleStore // 存储地址相关的FT合约Utxo数据  key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
 	uncheckFtOutpointStore    *storage.PebbleStore // 存储未检查的FT合约Utxo数据  key: outpoint, value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
@@ -114,17 +117,35 @@ func (i *ContractFtIndexer) IndexBlock(block *ContractFtBlock, updateHeight bool
 		return fmt.Errorf("invalid block: %w", err)
 	}
 
+	// 添加计时器
+	startTime := time.Now()
+	// if lastLogTime.IsZero() {
+	// 	lastLogTime = startTime
+	// }
+	txCount := len(block.Transactions)
+
 	// Phase 1: Index all contract outputs
 	if err := i.indexContractFtOutputs(block); err != nil {
 		return fmt.Errorf("failed to index contract outputs: %w", err)
 	}
 	block.ContractFtOutputs = nil
+	elapsed1 := time.Now().Sub(startTime)
 
+	startTime2 := time.Now()
 	// Phase 2: Process all contract inputs
 	if err := i.processContractFtInputs(block); err != nil {
 		return fmt.Errorf("failed to process contract inputs: %w", err)
 	}
 	block.Transactions = nil
+	elapsed2 := time.Now().Sub(startTime2)
+
+	// 检查是否需要打印日志
+	currentTime := time.Now()
+	if txCount > 2000 && currentTime.Sub(lastLogTime) >= 5*time.Minute {
+		log.Printf("[IndexBlock][%d] 完成 indexContractFtOutputs, 处理 %d 交易, 耗时: %v 秒", block.Height, txCount, elapsed1.Seconds())
+		log.Printf("[IndexBlock][%d] 完成 processContractFtInputs, 处理 %d 交易, 总耗时: %v 秒", block.Height, txCount, elapsed2.Seconds())
+		lastLogTime = currentTime
+	}
 
 	if !block.IsPartialBlock && updateHeight {
 		heightStr := strconv.Itoa(block.Height)
@@ -377,7 +398,7 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 				originalValue := usedGenesisUtxoMap[txPoint]
 				genesisSpendMap[txPoint] = originalValue + "@1" // 添加@IsSpent标记
 			}
-			if err := i.contractFtGenesisUtxoStore.BulkMergeConcurrent(&genesisSpendMap, workers); err != nil {
+			if err := i.contractFtGenesisUtxoStore.BulkWriteConcurrent(&genesisSpendMap, workers); err != nil {
 				return err
 			}
 		}
@@ -422,7 +443,7 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 				}
 				genesisOutputMap[usedTxPoint] = strings.Join(outputs, ",")
 			}
-			if err := i.contractFtGenesisOutputStore.BulkMergeConcurrent(&genesisOutputMap, workers); err != nil {
+			if err := i.contractFtGenesisOutputStore.BulkWriteConcurrent(&genesisOutputMap, workers); err != nil {
 				return err
 			}
 

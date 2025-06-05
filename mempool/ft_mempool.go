@@ -2,6 +2,7 @@ package mempool
 
 import (
 	"encoding/json"
+
 	indexer "github.com/metaid/utxo_indexer/indexer/contract/meta-contract-ft"
 
 	"github.com/metaid/utxo_indexer/common"
@@ -27,7 +28,7 @@ func (m *FtMempoolManager) getRawFtUTXOsByAddress(address string, codeHash strin
 	spentMap := make(map[string]struct{})
 
 	// 1. 获取收入UTXO
-	incomeList, err := m.mempoolContractFtIncomeDB.GetFtUtxoByKey(address)
+	incomeList, err := m.mempoolAddressFtIncomeDB.GetFtUtxoByKey(address)
 	if err == nil {
 		for _, utxo := range incomeList {
 			if _, ok := incomeMap[utxo.TxID]; !ok {
@@ -37,7 +38,7 @@ func (m *FtMempoolManager) getRawFtUTXOsByAddress(address string, codeHash strin
 		}
 	}
 	// 2. 获取已花费的UTXO
-	spendList, err := m.mempoolContractFtSpendDB.GetFtUtxoByKey(address)
+	spendList, err := m.mempoolAddressFtSpendDB.GetFtUtxoByKey(address)
 	if err == nil {
 		for _, utxo := range spendList {
 			if _, ok := spentMap[utxo.TxID]; !ok {

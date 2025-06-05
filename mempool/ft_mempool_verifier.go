@@ -1,4 +1,4 @@
-package indexer
+package mempool
 
 import (
 	"fmt"
@@ -8,14 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2"
+	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/contract/meta-contract/decoder"
 	"github.com/metaid/utxo_indexer/storage"
 )
 
-// FtVerifyManager 管理FT-UTXO验证
-type FtVerifyManager struct {
-	indexer           *ContractFtIndexer
+// FtMempoolVerifier 管理内存池中FT-UTXO的验证
+type FtMempoolVerifier struct {
+	mempoolManager    *FtMempoolManager
 	verifyInterval    time.Duration // 验证间隔时间
 	stopChan          chan struct{} // 停止信号通道
 	isRunning         bool
@@ -25,10 +25,10 @@ type FtVerifyManager struct {
 	verifyCount       int64 // 已验证的UTXO数量
 }
 
-// NewFtVerifyManager 创建新的验证管理器
-func NewFtVerifyManager(indexer *ContractFtIndexer, verifyInterval time.Duration, batchSize, workerCount int) *FtVerifyManager {
-	return &FtVerifyManager{
-		indexer:           indexer,
+// NewFtMempoolVerifier 创建新的内存池验证管理器
+func NewFtMempoolVerifier(mempoolManager *FtMempoolManager, verifyInterval time.Duration, batchSize, workerCount int) *FtMempoolVerifier {
+	return &FtMempoolVerifier{
+		mempoolManager:    mempoolManager,
 		verifyInterval:    verifyInterval,
 		stopChan:          make(chan struct{}),
 		verifyBatchSize:   batchSize,
@@ -37,7 +37,7 @@ func NewFtVerifyManager(indexer *ContractFtIndexer, verifyInterval time.Duration
 }
 
 // Start 启动验证管理器
-func (m *FtVerifyManager) Start() error {
+func (m *FtMempoolVerifier) Start() error {
 	m.mu.Lock()
 	if m.isRunning {
 		m.mu.Unlock()
@@ -51,7 +51,7 @@ func (m *FtVerifyManager) Start() error {
 }
 
 // Stop 停止验证管理器
-func (m *FtVerifyManager) Stop() {
+func (m *FtMempoolVerifier) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -64,7 +64,7 @@ func (m *FtVerifyManager) Stop() {
 }
 
 // verifyLoop 验证循环
-func (m *FtVerifyManager) verifyLoop() {
+func (m *FtMempoolVerifier) verifyLoop() {
 	ticker := time.NewTicker(m.verifyInterval)
 	defer ticker.Stop()
 
@@ -73,48 +73,47 @@ func (m *FtVerifyManager) verifyLoop() {
 		case <-m.stopChan:
 			return
 		case <-ticker.C:
-			if err := m.verifyFtUtxos(); err != nil {
-				log.Printf("验证FT-UTXO失败: %v", err)
+			if err := m.verifyMempoolFtUtxos(); err != nil {
+				log.Printf("验证内存池FT-UTXO失败: %v", err)
 			}
 		}
 	}
 }
 
-// verifyFtUtxos 验证FT-UTXO
-func (m *FtVerifyManager) verifyFtUtxos() error {
-	// 获取未检查的UTXO数据
+// verifyMempoolFtUtxos 验证内存池中的FT-UTXO
+func (m *FtMempoolVerifier) verifyMempoolFtUtxos() error {
+	// 获取所有需要验证的UTXO
 	uncheckData := make(map[string]string)
 
-	// 遍历所有分片
-	for _, db := range m.indexer.uncheckFtOutpointStore.GetShards() {
-		iter, err := db.NewIter(&pebble.IterOptions{})
-		if err != nil {
-			return fmt.Errorf("创建迭代器失败: %w", err)
-		}
-		defer iter.Close()
+	// 获取所有未检查的UTXO
+	utxoList, err := m.mempoolManager.mempoolUncheckFtOutpointStore.GetFtUtxoByKey("")
+	if err != nil {
+		return fmt.Errorf("获取未检查UTXO失败: %w", err)
+	}
 
-		// 收集一批数据
-		count := 0
-		for iter.First(); iter.Valid(); iter.Next() {
-			//key: outpoint
-			//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
-			key := string(iter.Key())
-			value := string(iter.Value())
-			uncheckData[key] = value
-			count++
-
-			if count >= m.verifyBatchSize {
-				break
-			}
-		}
+	// 收集一批数据
+	count := 0
+	for _, utxo := range utxoList {
+		outpoint := utxo.TxID + ":" + utxo.Index
+		//value:ftAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value
+		utxoData := common.ConcatBytesOptimized([]string{
+			utxo.Address,
+			utxo.CodeHash,
+			utxo.Genesis,
+			utxo.SensibleId,
+			utxo.Amount,
+			utxo.Index,
+			utxo.Value,
+		}, "@")
+		uncheckData[outpoint] = utxoData
+		count++
 
 		if count >= m.verifyBatchSize {
 			break
 		}
 	}
 
-	//打印日志，uncheckData数量
-	log.Printf("验证FT-UTXO，uncheckData数量: %d", len(uncheckData))
+	log.Printf("验证内存池FT-UTXO，uncheckData数量: %d", len(uncheckData))
 	if len(uncheckData) == 0 {
 		return nil
 	}
@@ -155,7 +154,7 @@ func (m *FtVerifyManager) verifyFtUtxos() error {
 }
 
 // verifyWorker 验证工作协程
-func (m *FtVerifyManager) verifyWorker(utxoChan <-chan struct {
+func (m *FtMempoolVerifier) verifyWorker(utxoChan <-chan struct {
 	key   string
 	value string
 }, resultChan chan<- error) {
@@ -169,24 +168,24 @@ func (m *FtVerifyManager) verifyWorker(utxoChan <-chan struct {
 }
 
 // verifyUtxo 验证单个UTXO
-func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
+func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 	// 解析outpoint获取txId
 	txId := strings.Split(outpoint, ":")[0]
 
-	// 从usedFtIncomeStore获取使用该UTXO的交易
-	usedData, err := m.indexer.usedFtIncomeStore.Get([]byte(txId))
+	// 从mempoolUsedFtIncomeStore获取使用该UTXO的交易
+	usedData, err := m.mempoolManager.mempoolUsedFtIncomeStore.Get(txId)
 	if err != nil {
 		if err == storage.ErrNotFound {
 			// 如果找不到使用记录，说明UTXO未被使用，可以删除
-			return m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
+			return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteRecord(outpoint, "")
 		}
 		return err
 	}
 
 	// 解析UTXO数据
-	//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+	//value: ftAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value
 	utxoParts := strings.Split(utxoData, "@")
-	if len(utxoParts) < 9 {
+	if len(utxoParts) < 7 {
 		return fmt.Errorf("无效的UTXO数据格式: %s", utxoData)
 	}
 
@@ -208,16 +207,30 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	usedOutpoint := genesisTxId + ":" + strconv.Itoa(int(genesisIndex))
 
 	//从contractFtGenesisStore获取初始创世UTXO
-	genesisUtxo, err := m.indexer.contractFtGenesisStore.Get([]byte(usedOutpoint))
-	if err != nil {
-		return err
+	genesisUtxo, _ := m.mempoolManager.contractFtGenesisStore.Get([]byte(usedOutpoint))
+	// if err != nil {
+	// 	return err
+	// }
+	//如果genesisUtxo没有数据，则从mempoolContractFtUtxoStore获取
+	if len(genesisUtxo) == 0 {
+		genesisUtxo, err = m.mempoolManager.mempoolContractFtGenesisStore.GetFtGenesisByKey(usedOutpoint)
+		if err != nil {
+			return err
+		}
 	}
+
 	if len(genesisUtxo) > 0 {
 		//如果有，就从contractFtGenesisOutputStore里面获取
 		// key:usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
-		genesisOutputs, err := m.indexer.contractFtGenesisOutputStore.Get([]byte(usedOutpoint))
+		genesisOutputs, err := m.mempoolManager.contractFtGenesisOutputStore.Get([]byte(usedOutpoint))
 		if err != nil {
 			return err
+		}
+		if len(genesisOutputs) == 0 {
+			genesisOutputs, err = m.mempoolManager.mempoolContractFtGenesisOutputStore.GetFtGenesisOutputsByKey(usedOutpoint)
+			if err != nil {
+				return err
+			}
 		}
 		if len(genesisOutputs) > 0 {
 			genesisOutputParts := strings.Split(string(genesisOutputs), ",")
@@ -256,6 +269,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 				}
 			}
 		}
+
 	}
 
 	// 解析使用记录
@@ -264,60 +278,59 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		if used == "" {
 			continue
 		}
-
-		//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+		// value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
 		usedParts := strings.Split(used, "@")
 		if len(usedParts) < 9 {
 			continue
 		}
 
 		/*
-					if (usedTxo && usedTxo.length > 0) {
-			      for (const txo of usedTxo) {
-			        if (
-			          (txo.genesis == txOut.genesis &&
-			            txo.codeHash == txOut.codeHash &&
-			            txo.sensibleId == txOut.sensibleId) ||
-			          (txo.genesis == tokenHash &&
-			            txo.codeHash == tokenCodeHash &&
-			            txo.sensibleId === sensibleId) ||
-			          (txo.genesis == genesisHash &&
-			            txo.codeHash == genesisCodeHash &&
-			            txo.sensibleId === sensibleId) ||
-			          txo.txid == genesisTxId
-			        ) {
-			          return true;
-			        }
-			      }
-			    }
-			    return false;
+				if (usedTxo && usedTxo.length > 0) {
+			  for (const txo of usedTxo) {
+				if (
+				  (txo.genesis == txOut.genesis &&
+					txo.codeHash == txOut.codeHash &&
+					txo.sensibleId == txOut.sensibleId) ||
+				  (txo.genesis == tokenHash &&
+					txo.codeHash == tokenCodeHash &&
+					txo.sensibleId === sensibleId) ||
+				  (txo.genesis == genesisHash &&
+					txo.codeHash == genesisCodeHash &&
+					txo.sensibleId === sensibleId) ||
+				  txo.txid == genesisTxId
+				) {
+				  return true;
+				}
+			  }
+			}
+			return false;
 		*/
 
 		// 检查codeHash、genesis和sensibleId是否匹配
 		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == sensibleId {
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
-			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
+			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
 			}
 			break
 		}
 		if usedParts[1] == tokenCodeHash && usedParts[2] == tokenHash && usedParts[3] == sensibleId {
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
-			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
+			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
 			}
 			break
 		}
 		if usedParts[1] == genesisCodeHash && usedParts[2] == genesisHash && usedParts[3] == sensibleId {
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
-			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
+			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
 			}
 			break
 		}
 		if usedParts[5] == genesisTxId {
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
-			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
+			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
 			}
 			break
@@ -325,55 +338,24 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	}
 
 	// 删除已验证的UTXO
-	return m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
+	return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteRecord(outpoint, "")
 }
 
 // addToValidStore 添加UTXO到有效存储
-func (m *FtVerifyManager) addToValidStore(ftAddress, utxoData string) error {
-	// 获取现有的有效UTXO数据
-	//key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
-	existingData, err := m.indexer.addressFtIncomeValidStore.Get([]byte(ftAddress))
-	if err != nil && err != storage.ErrNotFound {
-		return err
-	}
-
-	// 从 utxoData 中提取 txId 和 index
-	//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+// value:ftAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value
+func (m *FtMempoolVerifier) addToValidStore(outpoint, ftAddress, utxoData string) error {
 	utxoParts := strings.Split(utxoData, "@")
-	if len(utxoParts) < 9 {
+	if len(utxoParts) < 7 {
 		return fmt.Errorf("无效的UTXO数据格式: %s", utxoData)
 	}
-	txId := utxoParts[5]  // txId 在第6个位置
-	index := utxoParts[6] // index 在第7个位置
-	currentOutpoint := txId + ":" + index
-
-	var validUtxos []string
-	if err == nil {
-		validUtxos = strings.Split(string(existingData), ",")
-		// 检查是否已存在相同的 UTXO
-		for _, existingUtxo := range validUtxos {
-			if existingUtxo == "" {
-				continue
-			}
-			//value: CodeHash@Genesis@Amount@TxID@Index@Value@height
-			existingParts := strings.Split(existingUtxo, "@")
-			if len(existingParts) < 7 {
-				continue
-			}
-			existingTxId := existingParts[3]
-			existingIndex := existingParts[4]
-			existingOutpoint := existingTxId + ":" + existingIndex
-
-			if existingOutpoint == currentOutpoint {
-				// 已存在相同的 UTXO，直接返回
-				return nil
-			}
-		}
-	}
-
-	// 添加新的UTXO
-	validUtxos = append(validUtxos, utxoData)
-
-	// 更新存储
-	return m.indexer.addressFtIncomeValidStore.Set([]byte(ftAddress), []byte(strings.Join(validUtxos, ",")))
+	//value:CodeHash@Genesis@sensibleId@Amount@Index@Value
+	newValue := common.ConcatBytesOptimized([]string{
+		utxoParts[1],
+		utxoParts[2],
+		utxoParts[3],
+		utxoParts[4],
+		utxoParts[5],
+		utxoParts[6],
+	}, "@")
+	return m.mempoolManager.mempoolAddressFtIncomeValidStore.AddRecord(outpoint, ftAddress, []byte(newValue))
 }

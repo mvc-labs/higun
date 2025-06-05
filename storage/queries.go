@@ -106,7 +106,7 @@ func (s *SimpleDB) GetUtxoByKey(key string) (utxoList []common.Utxo, err error) 
 // GetByUTXO 通过UTXO ID查询相关联的地址
 // 例如: 对于键 "tx1:0_addr1", 通过 "tx1:0" 查询
 // value:CodeHash@Genesis@Amount@Value
-func (s *SimpleDB) GetByFtUTXO(utxoID string) (address string, codeHash string, genesis string, amount string, value string, err error) {
+func (s *SimpleDB) GetByFtUTXO(utxoID string) (address string, codeHash string, genesis string, sensibleId string, amount string, value string, err error) {
 	// 使用前缀查询找到所有匹配的键
 	prefix := []byte(utxoID + "_")
 	// 创建迭代器
@@ -133,11 +133,56 @@ func (s *SimpleDB) GetByFtUTXO(utxoID string) (address string, codeHash string, 
 		// 获取键对应的值
 		valueData := string(iter.Value())
 		valueParts := strings.Split(valueData, "@")
-		if len(valueParts) == 4 {
+		if len(valueParts) == 5 {
 			codeHash = valueParts[0]
 			genesis = valueParts[1]
-			amount = valueParts[2]
-			value = valueParts[3]
+			sensibleId = valueParts[2]
+			amount = valueParts[3]
+			value = valueParts[4]
+		}
+		break
+	}
+	return
+}
+
+// GetByUTXO 通过UTXO ID查询相关联的地址
+// 例如: 对于键 "tx1:0_addr1", 通过 "tx1:0" 查询
+// value:CodeHash@Genesis@sensibleId@customData@Index@Value
+func (s *SimpleDB) GetByUniqueFtUTXO(utxoID string) (codehashGenesis string, codeHash string, genesis string, sensibleId string, customData string, value string, err error) {
+	// 使用前缀查询找到所有匹配的键
+	prefix := []byte(utxoID + "_")
+	// 创建迭代器
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+	})
+	if err != nil {
+		return
+	}
+	defer iter.Close()
+	// 遍历找到所有匹配的键
+	for iter.First(); iter.Valid(); iter.Next() {
+		// 检查键是否以前缀开头
+		key := iter.Key()
+		if !strings.HasPrefix(string(key), string(prefix)) {
+			break // 已经超出前缀范围
+		}
+
+		// 提取地址部分(在_之后的部分)
+		keyParts := strings.Split(string(key), "_")
+		if len(keyParts) == 2 {
+			codehashGenesis = keyParts[1]
+		}
+		// 获取键对应的值
+		valueData := string(iter.Value())
+		valueParts := strings.Split(valueData, "@")
+		if len(valueParts) == 6 {
+			codeHash = valueParts[0]
+			genesis = valueParts[1]
+			sensibleId = valueParts[2]
+			customData = valueParts[3]
+			index := valueParts[4]
+			value = valueParts[5]
+			_ = index
 		}
 		break
 	}
@@ -146,7 +191,7 @@ func (s *SimpleDB) GetByFtUTXO(utxoID string) (address string, codeHash string, 
 
 // GetByAddress 通过地址查询所有相关的UTXO
 // 例如: 对于键 "addr1_tx1:0", 通过 "addr1" 查询
-// value:CodeHash@Genesis@Amount@Value
+// value:CodeHash@Genesis@sensibleId@Amount@Index@Value
 func (s *SimpleDB) GetFtUtxoByKey(key string) (ftUtxoList []common.FtUtxo, err error) {
 	// 使用前缀查询找到所有匹配的键
 	prefix := []byte(key + "_")
@@ -182,15 +227,77 @@ func (s *SimpleDB) GetFtUtxoByKey(key string) (ftUtxoList []common.FtUtxo, err e
 		// 获取键对应的值
 		valueData := string(iter.Value())
 		valueParts := strings.Split(valueData, "@")
-		if len(valueParts) == 4 {
+		if len(valueParts) == 6 {
 			utxo.CodeHash = valueParts[0]
 			utxo.Genesis = valueParts[1]
-			utxo.Amount = valueParts[2]
-			utxo.Value = valueParts[3]
+			utxo.SensibleId = valueParts[2]
+			utxo.Amount = valueParts[3]
+			utxo.Index = valueParts[4]
+			utxo.Value = valueParts[5]
 		}
 		ftUtxoList = append(ftUtxoList, utxo)
 	}
 	return
+}
+
+// GetFtGenesisByKey 通过outpoint查询所有相关的创世信息
+// 例如: 对于键 "outpoint_", 通过 "outpoint" 查询
+// key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis
+func (s *SimpleDB) GetFtGenesisByKey(key string) ([]byte, error) {
+	// 使用前缀查询找到所有匹配的键
+	prefix := []byte(key + "_")
+	// 创建迭代器
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	// 遍历找到所有匹配的键
+	for iter.First(); iter.Valid(); iter.Next() {
+		// 检查键是否以前缀开头
+		key := iter.Key()
+		if !strings.HasPrefix(string(key), string(prefix)) {
+			break // 已经超出前缀范围
+		}
+
+		// 返回第一个匹配的值
+		return iter.Value(), nil
+	}
+
+	return nil, nil
+}
+
+// GetFtGenesisByKey 通过outpoint查询所有相关的创世信息
+// 例如: 对于键 "outpoint_", 通过 "outpoint" 查询
+// key: usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
+func (s *SimpleDB) GetFtGenesisOutputsByKey(key string) ([]byte, error) {
+	// 使用前缀查询找到所有匹配的键
+	prefix := []byte(key + "_")
+	// 创建迭代器
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	// 遍历找到所有匹配的键
+	for iter.First(); iter.Valid(); iter.Next() {
+		// 检查键是否以前缀开头
+		key := iter.Key()
+		if !strings.HasPrefix(string(key), string(prefix)) {
+			break // 已经超出前缀范围
+		}
+
+		// 返回第一个匹配的值
+		return iter.Value(), nil
+	}
+
+	return nil, nil
 }
 
 // SetWithIndex

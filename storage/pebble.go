@@ -77,7 +77,10 @@ func (m *MetaStore) Sync() error {
 type StoreType int
 
 const (
-	StoreTypeMeta StoreType = iota
+	StoreTypeUTXO StoreType = iota
+	StoreTypeIncome
+	StoreTypeSpend
+	StoreTypeMeta
 	StoreTypeContractFTUTXO
 	StoreTypeAddressFTIncome
 	StoreTypeAddressFTSpend
@@ -124,6 +127,12 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 	for i := 0; i < shardCount; i++ {
 		var dbPath string
 		switch storeType {
+		case StoreTypeUTXO:
+			dbPath = filepath.Join(dataDir, "utxo", fmt.Sprintf("shard_%d", i))
+		case StoreTypeIncome:
+			dbPath = filepath.Join(dataDir, "income", fmt.Sprintf("shard_%d", i))
+		case StoreTypeSpend:
+			dbPath = filepath.Join(dataDir, "spend", fmt.Sprintf("shard_%d", i))
 		case StoreTypeContractFTUTXO:
 			dbPath = filepath.Join(dataDir, "contract_ft_utxo", fmt.Sprintf("shard_%d", i))
 		case StoreTypeAddressFTIncome:

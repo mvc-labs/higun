@@ -7,14 +7,20 @@ type Utxo struct {
 }
 
 type FtUtxo struct {
-	UtxoId   string
-	Index    string
-	TxID     string
-	Address  string
-	Value    string
-	Amount   string
-	CodeHash string
-	Genesis  string
+	ContractType string
+	UtxoId       string
+	Index        string
+	TxID         string
+	Address      string
+	Value        string
+	Amount       string
+	Decimal      string
+	CodeHash     string
+	Genesis      string
+	SensibleId   string
+	CustomData   string
+	Name         string
+	Symbol       string
 }
 
 // FtInfo 结构体定义
