@@ -188,7 +188,7 @@ func main() {
 	}
 
 	// 启动API服务器
-	server := api.NewFtServer(idx, metaStore, stopCh)
+	server := api.NewFtServer(bcClient, idx, metaStore, stopCh)
 	log.Printf("启动FT-UTXO索引器API，端口:%s", cfg.APIPort)
 	go server.Start(fmt.Sprintf(":%s", cfg.APIPort))
 

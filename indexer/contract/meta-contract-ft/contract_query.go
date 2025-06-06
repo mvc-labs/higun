@@ -74,8 +74,9 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 			if spendValue == "" {
 				continue
 			}
+			//spendValue: txid@index@codeHash@genesis@sensibleId@amount@value@height@usedTxId,...
 			spendValueStrs := strings.Split(spendValue, "@")
-			if len(spendValueStrs) != 6 {
+			if len(spendValueStrs) != 9 {
 				continue
 			}
 			outpoint := spendValueStrs[0] + ":" + spendValueStrs[1]
@@ -100,9 +101,7 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 
 	// 获取FT收入数据
 	data, _, err := i.addressFtIncomeStore.GetWithShard(addrKey)
-	fmt.Println("data", string(data))
 	if err != nil {
-		fmt.Println("err", err)
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, nil
 		}
@@ -117,8 +116,9 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		if part == "" {
 			continue
 		}
+		//CodeHash@Genesis@Amount@TxID@Index@Value@height
 		incomes := strings.Split(part, "@")
-		if len(incomes) < 6 {
+		if len(incomes) < 7 {
 			continue
 		}
 
@@ -129,7 +129,9 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		currTxID := incomes[3]
 		currIndex := incomes[4]
 		currValue := incomes[5]
+		currHeight := incomes[6]
 		_ = currValue
+		_ = currHeight
 
 		// 如果指定了codeHash和genesis，则只处理匹配的
 		if codeHash != "" && codeHash != currCodeHash {
@@ -290,8 +292,9 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			if spendValue == "" {
 				continue
 			}
+			//spendValue: txid@index@codeHash@genesis@sensibleId@amount@value@height@usedTxId,...
 			spendValueStrs := strings.Split(spendValue, "@")
-			if len(spendValueStrs) != 6 {
+			if len(spendValueStrs) != 9 {
 				continue
 			}
 			outpoint := spendValueStrs[0] + ":" + spendValueStrs[1]
@@ -328,8 +331,9 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 		if part == "" {
 			continue
 		}
+		//CodeHash@Genesis@Amount@TxID@Index@Value@height
 		incomes := strings.Split(part, "@")
-		if len(incomes) < 6 {
+		if len(incomes) < 7 {
 			continue
 		}
 
@@ -340,6 +344,7 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 		currTxID := incomes[3]
 		currIndex := incomes[4]
 		currValue := incomes[5]
+		currHeight := incomes[6]
 
 		// 如果指定了codeHash和genesis，则只处理匹配的
 		if codeHash != "" && codeHash != currCodeHash {
@@ -371,6 +376,11 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			continue
 		}
 
+		height, err := strconv.ParseInt(currHeight, 10, 64)
+		if err != nil {
+			continue
+		}
+
 		utxos = append(utxos, &FtUTXO{
 			Txid:          currTxID,
 			TxIndex:       currIndex,
@@ -385,7 +395,7 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			Symbol:        ftInfo.Symbol,
 			Decimal:       ftInfo.Decimal,
 			Address:       address,
-			Height:        -1, // 已确认的UTXO
+			Height:        height, // 已确认的UTXO
 			Flag:          "confirmed",
 		})
 	}
@@ -436,7 +446,7 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			Symbol:        ftInfo.Symbol,
 			Decimal:       ftInfo.Decimal,
 			Address:       address,
-			Height:        0, // 内存池中的UTXO
+			Height:        -1, // 内存池中的UTXO
 			Flag:          "unconfirmed",
 		})
 	}
@@ -448,12 +458,78 @@ func (i *ContractFtIndexer) GetDbFtUtxoByTx(tx string) ([]byte, error) {
 	return i.contractFtUtxoStore.Get([]byte(tx))
 }
 
-func (i *ContractFtIndexer) GetDbAddressFtIncomeByTx(address string) ([]byte, error) {
-	return i.addressFtIncomeStore.Get([]byte(address))
+func (i *ContractFtIndexer) GetDbAddressFtIncome(address string, codeHash string, genesis string) ([]string, error) {
+	data, err := i.addressFtIncomeStore.Get([]byte(address))
+	if err != nil {
+		return nil, err
+	}
+
+	if codeHash == "" && genesis == "" {
+		return strings.Split(string(data), ","), nil // 返回所有数据
+	}
+
+	// 按逗号分割数据
+	parts := strings.Split(string(data), ",")
+	filteredParts := make([]string, 0)
+
+	// 筛选数据
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		//CodeHash@Genesis@Amount@TxID@Index@Value@height
+		incomes := strings.Split(part, "@")
+		if len(incomes) < 7 {
+			continue
+		}
+
+		currCodeHash := incomes[0]
+		currGenesis := incomes[1]
+
+		if (codeHash == "" || currCodeHash == codeHash) && (genesis == "" || currGenesis == genesis) {
+			filteredParts = append(filteredParts, part)
+		}
+	}
+
+	// 重新组合数据
+	return filteredParts, nil
 }
 
-func (i *ContractFtIndexer) GetDbAddressFtSpendByTx(address string) ([]byte, error) {
-	return i.addressFtSpendStore.Get([]byte(address))
+func (i *ContractFtIndexer) GetDbAddressFtSpend(address string, codeHash string, genesis string) ([]string, error) {
+	data, err := i.addressFtSpendStore.Get([]byte(address))
+	if err != nil {
+		return nil, err
+	}
+
+	if codeHash == "" && genesis == "" {
+		return strings.Split(string(data), ","), nil // 返回所有数据
+	}
+
+	// 按逗号分割数据
+	parts := strings.Split(string(data), ",")
+	filteredParts := make([]string, 0)
+
+	// 筛选数据
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		//txid@index@codeHash@genesis@amount@value@height@usedTxId
+		spends := strings.Split(part, "@")
+		if len(spends) < 8 {
+			continue
+		}
+
+		currCodeHash := spends[2]
+		currGenesis := spends[3]
+
+		if (codeHash == "" || currCodeHash == codeHash) && (genesis == "" || currGenesis == genesis) {
+			filteredParts = append(filteredParts, part)
+		}
+	}
+
+	// 重新组合数据
+	return filteredParts, nil
 }
 
 // GetFtInfo 获取FT信息
@@ -554,4 +630,246 @@ func (i *ContractFtIndexer) GetAllDbAddressFtSpend() (map[string]string, error) 
 	}
 
 	return result, nil
+}
+
+// GetDbAddressFtIncomeValidByAddress 获取指定地址的有效 FT 收入数据
+func (i *ContractFtIndexer) GetDbAddressFtIncomeValid(address string, codeHash string, genesis string) ([]string, error) {
+	data, err := i.addressFtIncomeValidStore.Get([]byte(address))
+	if err != nil {
+		return nil, err
+	}
+
+	if codeHash == "" && genesis == "" {
+		return strings.Split(string(data), ","), nil // 返回所有数据
+	}
+
+	// 按逗号分割数据
+	parts := strings.Split(string(data), ",")
+	filteredParts := make([]string, 0)
+
+	// 筛选数据
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		//CodeHash@Genesis@Amount@TxID@Index@Value@height
+		//FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+		incomes := strings.Split(part, "@")
+		if len(incomes) < 9 {
+			continue
+		}
+
+		currCodeHash := incomes[1]
+		currGenesis := incomes[2]
+
+		if (codeHash == "" || currCodeHash == codeHash) && (genesis == "" || currGenesis == genesis) {
+			filteredParts = append(filteredParts, part)
+		}
+	}
+
+	// 返回筛选后的数据
+	return filteredParts, nil
+}
+
+// GetAllDbUncheckFtOutpoint 获取未检查的 FT outpoint 数据
+// 如果提供了 outpoint 参数，则只返回对应的 value
+// 如果没有提供 outpoint 参数，则返回所有数据
+func (i *ContractFtIndexer) GetAllDbUncheckFtOutpoint(outpoint string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	// 如果提供了 outpoint，直接获取对应的值
+	if outpoint != "" {
+		value, err := i.uncheckFtOutpointStore.Get([]byte(outpoint))
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return result, nil
+			}
+			return nil, fmt.Errorf("获取 outpoint 数据失败: %w", err)
+		}
+		result[outpoint] = string(value)
+		return result, nil
+	}
+
+	// 遍历所有分片
+	for _, db := range i.uncheckFtOutpointStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对
+		for iter.First(); iter.Valid(); iter.Next() {
+			key := string(iter.Key())
+			value := string(iter.Value())
+			result[key] = value
+		}
+	}
+
+	return result, nil
+}
+
+// GetAllDbFtGenesis 获取所有 FT Genesis 数据
+func (i *ContractFtIndexer) GetAllDbFtGenesis(key string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	// 如果提供了 key，直接获取对应的值
+	if key != "" {
+		value, err := i.contractFtGenesisStore.Get([]byte(key))
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return result, nil
+			}
+			return nil, fmt.Errorf("获取 FT Genesis 数据失败: %w", err)
+		}
+		result[key] = string(value)
+		return result, nil
+	}
+
+	// 遍历所有分片
+	for _, db := range i.contractFtGenesisStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对
+		for iter.First(); iter.Valid(); iter.Next() {
+			key := string(iter.Key())
+			value := string(iter.Value())
+			result[key] = value
+		}
+	}
+
+	return result, nil
+}
+
+// GetAllDbFtGenesisOutput 获取所有 FT Genesis Output 数据
+func (i *ContractFtIndexer) GetAllDbFtGenesisOutput(key string) (map[string][]string, error) {
+	result := make(map[string][]string)
+
+	// 如果提供了 key，直接获取对应的值
+	if key != "" {
+		value, err := i.contractFtGenesisOutputStore.Get([]byte(key))
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return result, nil
+			}
+			return nil, fmt.Errorf("获取 FT Genesis Output 数据失败: %w", err)
+		}
+		result[key] = strings.Split(string(value), ",")
+		return result, nil
+	}
+
+	// 遍历所有分片
+	for _, db := range i.contractFtGenesisOutputStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对
+		for iter.First(); iter.Valid(); iter.Next() {
+			key := string(iter.Key())
+			value := string(iter.Value())
+			result[key] = strings.Split(value, ",")
+		}
+	}
+
+	return result, nil
+}
+
+// GetAllDbUsedFtIncome 获取所有已使用的 FT 收入数据
+func (i *ContractFtIndexer) GetAllDbUsedFtIncome(key string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	// 如果提供了 key，直接获取对应的值
+	if key != "" {
+		value, err := i.usedFtIncomeStore.Get([]byte(key))
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return result, nil
+			}
+			return nil, fmt.Errorf("获取已使用的 FT 收入数据失败: %w", err)
+		}
+		result[key] = string(value)
+		return result, nil
+	}
+
+	// 遍历所有分片
+	for _, db := range i.usedFtIncomeStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对
+		for iter.First(); iter.Valid(); iter.Next() {
+			key := string(iter.Key())
+			value := string(iter.Value())
+			result[key] = value
+		}
+	}
+
+	return result, nil
+}
+
+// GetAllDbFtGenesisUtxo 获取所有 FT Genesis UTXO 数据
+func (i *ContractFtIndexer) GetAllDbFtGenesisUtxo(key string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	// 如果提供了 key，直接获取对应的值
+	if key != "" {
+		value, err := i.contractFtGenesisUtxoStore.Get([]byte(key))
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return result, nil
+			}
+			return nil, fmt.Errorf("获取 FT Genesis UTXO 数据失败: %w", err)
+		}
+		result[key] = string(value)
+		return result, nil
+	}
+
+	// 遍历所有分片
+	for _, db := range i.contractFtGenesisUtxoStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对
+		for iter.First(); iter.Valid(); iter.Next() {
+			key := string(iter.Key())
+			value := string(iter.Value())
+			result[key] = value
+		}
+	}
+
+	return result, nil
+}
+
+// GetUncheckFtOutpointTotal 获取未检查的 FT outpoint 总数量
+func (i *ContractFtIndexer) GetUncheckFtOutpointTotal() (int64, error) {
+	var total int64 = 0
+
+	// 遍历所有分片
+	for _, db := range i.uncheckFtOutpointStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return 0, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对并计数
+		for iter.First(); iter.Valid(); iter.Next() {
+			total++
+		}
+	}
+
+	return total, nil
 }

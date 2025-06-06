@@ -17,13 +17,14 @@ import (
 )
 
 var (
+	// 记录上一次打印日志的时间
 	lastLogTime time.Time
 )
 
 type ContractFtIndexer struct {
 	contractFtUtxoStore  *storage.PebbleStore // 存储合约Utxo数据 key: txID, value:FtAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value@height@contractType,...
 	addressFtIncomeStore *storage.PebbleStore // 存储地址相关的FT合约Utxo数据  key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
-	addressFtSpendStore  *storage.PebbleStore // 存储已使用的FT合约Utxo数据  key: FtAddress, value: txid@index@codeHash@genesis@amount@value@height@usedTxId,...
+	addressFtSpendStore  *storage.PebbleStore // 存储已使用的FT合约Utxo数据  key: FtAddress, value: txid@index@codeHash@genesis@sensibleId@amount@value@height@usedTxId,...
 
 	contractFtInfoStore          *storage.PebbleStore // 存储合约信息 key:codeHash@genesis, value: sensibleId@name@symbol@decimal
 	contractFtGenesisStore       *storage.PebbleStore // 存储合约创世信息 key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis
@@ -141,7 +142,7 @@ func (i *ContractFtIndexer) IndexBlock(block *ContractFtBlock, updateHeight bool
 
 	// 检查是否需要打印日志
 	currentTime := time.Now()
-	if txCount > 2000 && currentTime.Sub(lastLogTime) >= 5*time.Minute {
+	if lastLogTime.IsZero() || currentTime.Sub(lastLogTime) >= 5*time.Minute {
 		log.Printf("[IndexBlock][%d] 完成 indexContractFtOutputs, 处理 %d 交易, 耗时: %v 秒", block.Height, txCount, elapsed1.Seconds())
 		log.Printf("[IndexBlock][%d] 完成 processContractFtInputs, 处理 %d 交易, 总耗时: %v 秒", block.Height, txCount, elapsed2.Seconds())
 		lastLogTime = currentTime
@@ -328,6 +329,9 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 		for _, in := range tx.Inputs {
 			allTxPoints = append(allTxPoints, in.TxPoint)
 			txPointUsedMap[in.TxPoint] = tx.ID
+			// if in.TxPoint == "ab59d2bc50a8d6bcc7c1234c59af54e4ea6d0eab7d2b57009b6ca85f57c52dec:0" {
+			// 	fmt.Printf("找到：txPoint: %s, txId: %s\n", in.TxPoint, tx.ID)
+			// }
 		}
 	}
 
@@ -336,6 +340,9 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 		if err == nil {
 			// 找到创世UTXO，记录交易outpoint
 			usedGenesisUtxoMap[txPoint] = string(value)
+			// if txPoint == "ab59d2bc50a8d6bcc7c1234c59af54e4ea6d0eab7d2b57009b6ca85f57c52dec:0" {
+			// 	fmt.Printf("找到GenesisUtxo：txPoint: %s, value: %s\n", txPoint, string(value))
+			// }
 		}
 	}
 
@@ -405,13 +412,67 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 
 		// 处理创世输出存储
 		// key: txID, value: sensibleId@name@symobl@decimal@codeHash@genesis@amount@index@value,...
-		if len(usedGenesisUtxoMap) > 0 {
+		// if len(usedGenesisUtxoMap) > 0 {
+		// 	genesisOutputMap := make(map[string]string)
+		// 	for usedTxPoint, _ := range usedGenesisUtxoMap {
+		// 		if _, exists := txPointUsedMap[usedTxPoint]; !exists {
+		// 			continue
+		// 		}
+		// 		txID := txPointUsedMap[usedTxPoint]
+		// 		// if txID == "ab59d2bc50a8d6bcc7c1234c59af54e4ea6d0eab7d2b57009b6ca85f57c52dec" {
+		// 		// 	fmt.Printf("找到：usedTxPoint: %s, txID: %s\n", usedTxPoint, txID)
+		// 		// }
+		// 		var tx *ContractFtTransaction
+		// 		for _, v := range block.Transactions {
+		// 			if v.ID == txID {
+		// 				tx = v
+		// 				break
+		// 			}
+		// 		}
+		// 		if tx == nil {
+		// 			continue
+		// 		}
+
+		// 		// 收集该交易的所有输出信息
+		// 		var outputs []string
+		// 		for x, out := range tx.Outputs {
+		// 			//key: usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
+		// 			outputInfo := common.ConcatBytesOptimized([]string{
+		// 				out.SensibleId,
+		// 				out.Name,
+		// 				out.Symbol,
+		// 				strconv.FormatUint(uint64(out.Decimal), 10),
+		// 				out.CodeHash,
+		// 				out.Genesis,
+		// 				out.Amount,
+		// 				txID,
+		// 				strconv.Itoa(x),
+		// 				out.Value,
+		// 			}, "@")
+		// 			outputs = append(outputs, outputInfo)
+		// 		}
+		// 		genesisOutputMap[usedTxPoint] = strings.Join(outputs, ",")
+		// 		// if usedTxPoint == "ab59d2bc50a8d6bcc7c1234c59af54e4ea6d0eab7d2b57009b6ca85f57c52dec:0" {
+		// 		// 	fmt.Printf("找到：usedTxPoint: %s, outputs: %s\n", usedTxPoint, strings.Join(outputs, ","))
+		// 		// }
+		// 	}
+		// 	if err := i.contractFtGenesisOutputStore.BulkWriteConcurrent(&genesisOutputMap, workers); err != nil {
+		// 		return err
+		// 	}
+
+		// 	for k := range genesisOutputMap {
+		// 		delete(genesisOutputMap, k)
+		// 	}
+		// 	genesisOutputMap = nil
+		// }
+
+		if len(allTxPoints) > 0 {
 			genesisOutputMap := make(map[string]string)
-			for usedTxPoint, _ := range usedGenesisUtxoMap {
-				if _, exists := txPointUsedMap[usedTxPoint]; !exists {
-					continue
-				}
+			for _, usedTxPoint := range allTxPoints {
 				txID := txPointUsedMap[usedTxPoint]
+				// if txID == "ab59d2bc50a8d6bcc7c1234c59af54e4ea6d0eab7d2b57009b6ca85f57c52dec" {
+				// 	fmt.Printf("找到：usedTxPoint: %s, txID: %s\n", usedTxPoint, txID)
+				// }
 				var tx *ContractFtTransaction
 				for _, v := range block.Transactions {
 					if v.ID == txID {
@@ -451,6 +512,7 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 				delete(genesisOutputMap, k)
 			}
 			genesisOutputMap = nil
+
 		}
 
 		for k := range addressFtResult {

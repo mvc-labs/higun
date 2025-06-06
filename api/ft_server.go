@@ -1,14 +1,11 @@
 package api
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	indexer "github.com/metaid/utxo_indexer/indexer/contract/meta-contract-ft"
@@ -30,7 +27,7 @@ type FtServer struct {
 	mempoolInit bool // 内存池是否已初始化
 }
 
-func NewFtServer(indexer *indexer.ContractFtIndexer, metaStore *storage.MetaStore, stopCh <-chan struct{}) *FtServer {
+func NewFtServer(bcClient *blockchain.FtClient, indexer *indexer.ContractFtIndexer, metaStore *storage.MetaStore, stopCh <-chan struct{}) *FtServer {
 	gin.SetMode(gin.ReleaseMode)
 	gin.DefaultWriter = io.Discard
 	server := &FtServer{
@@ -39,6 +36,7 @@ func NewFtServer(indexer *indexer.ContractFtIndexer, metaStore *storage.MetaStor
 		mempoolInit: false,
 		metaStore:   metaStore,
 		stopCh:      stopCh,
+		bcClient:    bcClient,
 	}
 
 	server.setupRoutes()
@@ -54,15 +52,25 @@ func (s *FtServer) SetMempoolManager(mempoolMgr *mempool.FtMempoolManager, bcCli
 func (s *FtServer) setupRoutes() {
 	s.router.GET("/ft/balance", s.getFtBalance)
 	s.router.GET("/ft/utxos", s.getFtUTXOs)
-	s.router.GET("/ft/utxo/db", s.getFtUtxoByTx)
-	s.router.GET("/ft/income/db", s.getFtIncomeByAddress)
-	s.router.GET("/ft/spend/db", s.getFtSpendByAddress)
+
+	s.router.GET("/db/ft/utxo", s.getDbFtUtxoByTx)
+	s.router.GET("/db/ft/income", s.getDbFtIncomeByAddress)
+	s.router.GET("/db/ft/income/valid", s.getDbAddressFtIncomeValid)
+	s.router.GET("/db/ft/spend", s.getDbFtSpendByAddress)
+	s.router.GET("/db/ft/all/income", s.getDbAllFtIncome)
+	s.router.GET("/db/ft/all/spend", s.getDbAllFtSpend)
+	s.router.GET("/db/ft/address/income", s.getDbAddressFtIncome)
+	s.router.GET("/db/ft/address/spend", s.getDbAddressFtSpend)
+	s.router.GET("/db/ft/info", s.getDbFtInfo)
+	s.router.GET("/db/ft/uncheck/outpoint", s.getAllDbUncheckFtOutpoint)
+	s.router.GET("/db/ft/uncheck/outpoint/all", s.getAllDbUncheckFtOutpoint)
+	s.router.GET("/db/ft/genesis", s.getAllDbFtGenesis)
+	s.router.GET("/db/ft/genesis/output", s.getAllDbFtGenesisOutput)
+	s.router.GET("/db/ft/genesis/utxo", s.getAllDbFtGenesisUtxo)
+	s.router.GET("/db/ft/used/income", s.getAllDbUsedFtIncome)
+	s.router.GET("/db/ft/uncheck/outpoint/total", s.getUncheckFtOutpointTotal)
+
 	s.router.GET("/ft/mempool/utxos", s.getFtMempoolUTXOs)
-	s.router.GET("/ft/all/income", s.getAllFtIncome)
-	s.router.GET("/ft/all/spend", s.getAllFtSpend)
-	s.router.GET("/ft/address/income", s.getAddressFtIncome)
-	s.router.GET("/ft/address/spend", s.getAddressFtSpend)
-	s.router.GET("/ft/info", s.getFtInfo)
 
 	// 添加启动内存池的API
 	s.router.GET("/ft/mempool/start", s.startMempool)
@@ -70,126 +78,6 @@ func (s *FtServer) setupRoutes() {
 	s.router.GET("/ft/mempool/rebuild", s.rebuildMempool)
 	// 重新索引区块API
 	s.router.GET("/ft/blocks/reindex", s.reindexBlocks)
-}
-
-func (s *FtServer) getFtBalance(c *gin.Context) {
-	address := c.Query("address")
-	if address == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "address parameter is required"})
-		return
-	}
-
-	codeHash := c.Query("codeHash")
-	genesis := c.Query("genesis")
-
-	balances, err := s.indexer.GetFtBalance(address, codeHash, genesis)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, balances)
-}
-
-func (s *FtServer) getFtUTXOs(c *gin.Context) {
-	address := c.Query("address")
-	if address == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "address parameter is required"})
-		return
-	}
-
-	codeHash := c.Query("codeHash")
-	genesis := c.Query("genesis")
-
-	utxos, err := s.indexer.GetFtUTXOs(address, codeHash, genesis)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"address": address,
-		"utxos":   utxos,
-		"count":   len(utxos),
-	})
-}
-
-func (s *FtServer) getFtUtxoByTx(c *gin.Context) {
-	tx := c.Query("tx")
-	if tx == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tx parameter is required"})
-		return
-	}
-
-	utxos, err := s.indexer.GetDbFtUtxoByTx(tx)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"utxos": string(utxos),
-	})
-}
-
-func (s *FtServer) getFtIncomeByAddress(c *gin.Context) {
-	address := c.Query("address")
-	if address == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "address parameter is required"})
-		return
-	}
-
-	income, err := s.indexer.GetDbAddressFtIncomeByTx(address)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"income": string(income),
-	})
-}
-
-func (s *FtServer) getFtSpendByAddress(c *gin.Context) {
-	address := c.Query("address")
-	if address == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "address parameter is required"})
-		return
-	}
-
-	spend, err := s.indexer.GetDbAddressFtSpendByTx(address)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"spend": string(spend),
-	})
-}
-
-func (s *FtServer) getFtMempoolUTXOs(c *gin.Context) {
-	address := c.Query("address")
-	if address == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "address parameter is required"})
-		return
-	}
-
-	codeHash := c.Query("codeHash")
-	genesis := c.Query("genesis")
-
-	imcome, spend, err := s.indexer.GetMempoolFtUTXOs(address, codeHash, genesis)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"address": address,
-		"imcome":  imcome,
-		"spend":   spend,
-		"count":   len(imcome) + len(spend),
-	})
 }
 
 // 启动内存池API
@@ -420,6 +308,26 @@ func (s *FtServer) rebuildMempool(c *gin.Context) {
 
 // reindexBlocks 重新索引指定范围的区块
 func (s *FtServer) reindexBlocks(c *gin.Context) {
+
+	// //配置区块链客户端
+	// cfg, err := config.LoadConfig()
+	// if err != nil {
+	// 	c.JSON(http.StatusInternalServerError, gin.H{
+	// 		"success": false,
+	// 		"error":   "加载配置失败: " + err.Error(),
+	// 	})
+	// 	return
+	// }
+	// bcClient, err := blockchain.NewFtClient(cfg)
+	// if err != nil {
+	// 	c.JSON(http.StatusInternalServerError, gin.H{
+	// 		"success": false,
+	// 		"error":   "创建区块链客户端失败: " + err.Error(),
+	// 	})
+	// 	return
+	// }
+	// s.bcClient = bcClient
+
 	// 检查区块链客户端是否已配置
 	if s.bcClient == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -506,386 +414,6 @@ func (s *FtServer) reindexBlocks(c *gin.Context) {
 
 		log.Printf("重新索引完成，处理了 %d 个区块，从高度 %d 到 %d", blocksToProcess, startHeight, endHeight)
 	}()
-}
-
-// getAllFtIncome 获取所有地址的 FT 收入数据
-func (s *FtServer) getAllFtIncome(c *gin.Context) {
-	// 获取分页参数
-	pageStr := c.DefaultQuery("page", "1")
-	pageSizeStr := c.DefaultQuery("page_size", "100")
-
-	page, err := strconv.Atoi(pageStr)
-	if err != nil || page < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的页码参数"})
-		return
-	}
-
-	pageSize, err := strconv.Atoi(pageSizeStr)
-	if err != nil || pageSize < 1 || pageSize > 1000 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的每页数量参数，范围应在1-1000之间"})
-		return
-	}
-
-	incomeData, err := s.indexer.GetAllDbAddressFtIncome()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 计算分页
-	total := len(incomeData)
-	start := (page - 1) * pageSize
-	end := start + pageSize
-
-	if start >= total {
-		c.JSON(http.StatusOK, gin.H{
-			"income_data": map[string]string{},
-			"pagination": gin.H{
-				"current_page": page,
-				"page_size":    pageSize,
-				"total":        total,
-				"total_pages":  (total + pageSize - 1) / pageSize,
-			},
-		})
-		return
-	}
-
-	if end > total {
-		end = total
-	}
-
-	// 创建分页后的数据
-	pagedData := make(map[string]string)
-	keys := make([]string, 0, len(incomeData))
-	for k := range incomeData {
-		keys = append(keys, k)
-	}
-
-	// 对键进行排序以确保分页的一致性
-	sort.Strings(keys)
-
-	// 获取当前页的数据
-	for i := start; i < end; i++ {
-		key := keys[i]
-		pagedData[key] = incomeData[key]
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"income_data": pagedData,
-		"pagination": gin.H{
-			"current_page": page,
-			"page_size":    pageSize,
-			"total":        total,
-			"total_pages":  (total + pageSize - 1) / pageSize,
-		},
-	})
-}
-
-// getAllFtSpend 获取所有地址的 FT 支出数据
-func (s *FtServer) getAllFtSpend(c *gin.Context) {
-	// 获取分页参数
-	pageStr := c.DefaultQuery("page", "1")
-	pageSizeStr := c.DefaultQuery("page_size", "100")
-
-	page, err := strconv.Atoi(pageStr)
-	if err != nil || page < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的页码参数"})
-		return
-	}
-
-	pageSize, err := strconv.Atoi(pageSizeStr)
-	if err != nil || pageSize < 1 || pageSize > 1000 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的每页数量参数，范围应在1-1000之间"})
-		return
-	}
-
-	spendData, err := s.indexer.GetAllDbAddressFtSpend()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 计算分页
-	total := len(spendData)
-	start := (page - 1) * pageSize
-	end := start + pageSize
-
-	if start >= total {
-		c.JSON(http.StatusOK, gin.H{
-			"spend_data": map[string]string{},
-			"pagination": gin.H{
-				"current_page": page,
-				"page_size":    pageSize,
-				"total":        total,
-				"total_pages":  (total + pageSize - 1) / pageSize,
-			},
-		})
-		return
-	}
-
-	if end > total {
-		end = total
-	}
-
-	// 创建分页后的数据
-	pagedData := make(map[string]string)
-	keys := make([]string, 0, len(spendData))
-	for k := range spendData {
-		keys = append(keys, k)
-	}
-
-	// 对键进行排序以确保分页的一致性
-	sort.Strings(keys)
-
-	// 获取当前页的数据
-	for i := start; i < end; i++ {
-		key := keys[i]
-		pagedData[key] = spendData[key]
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"spend_data": pagedData,
-		"pagination": gin.H{
-			"current_page": page,
-			"page_size":    pageSize,
-			"total":        total,
-			"total_pages":  (total + pageSize - 1) / pageSize,
-		},
-	})
-}
-
-// getAddressFtIncome 获取指定地址的 FT 收入数据
-func (s *FtServer) getAddressFtIncome(c *gin.Context) {
-	address := c.Query("address")
-	if address == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "address 参数是必须的"})
-		return
-	}
-
-	// 获取分页参数
-	pageStr := c.DefaultQuery("page", "1")
-	pageSizeStr := c.DefaultQuery("page_size", "100")
-
-	page, err := strconv.Atoi(pageStr)
-	if err != nil || page < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的页码参数"})
-		return
-	}
-
-	pageSize, err := strconv.Atoi(pageSizeStr)
-	if err != nil || pageSize < 1 || pageSize > 1000 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的每页数量参数，范围应在1-1000之间"})
-		return
-	}
-
-	// 获取地址的收入数据
-	incomeData, err := s.indexer.GetDbAddressFtIncomeByTx(address)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			c.JSON(http.StatusOK, gin.H{
-				"address":     address,
-				"income_data": "",
-				"pagination": gin.H{
-					"current_page": page,
-					"page_size":    pageSize,
-					"total":        0,
-					"total_pages":  0,
-				},
-			})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 将收入数据按逗号分割成数组
-	incomeItems := strings.Split(string(incomeData), ",")
-	if len(incomeItems) == 0 || (len(incomeItems) == 1 && incomeItems[0] == "") {
-		c.JSON(http.StatusOK, gin.H{
-			"address":     address,
-			"income_data": "",
-			"pagination": gin.H{
-				"current_page": page,
-				"page_size":    pageSize,
-				"total":        0,
-				"total_pages":  0,
-			},
-		})
-		return
-	}
-
-	// 计算分页
-	total := len(incomeItems)
-	start := (page - 1) * pageSize
-	end := start + pageSize
-
-	if start >= total {
-		c.JSON(http.StatusOK, gin.H{
-			"address":     address,
-			"income_data": "",
-			"pagination": gin.H{
-				"current_page": page,
-				"page_size":    pageSize,
-				"total":        total,
-				"total_pages":  (total + pageSize - 1) / pageSize,
-			},
-		})
-		return
-	}
-
-	if end > total {
-		end = total
-	}
-
-	// 获取当前页的数据
-	pagedItems := incomeItems[start:end]
-
-	c.JSON(http.StatusOK, gin.H{
-		"address":     address,
-		"income_data": strings.Join(pagedItems, ","),
-		"pagination": gin.H{
-			"current_page": page,
-			"page_size":    pageSize,
-			"total":        total,
-			"total_pages":  (total + pageSize - 1) / pageSize,
-		},
-	})
-}
-
-// getAddressFtSpend 获取指定地址的 FT 支出数据
-func (s *FtServer) getAddressFtSpend(c *gin.Context) {
-	address := c.Query("address")
-	if address == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "address 参数是必须的"})
-		return
-	}
-
-	// 获取分页参数
-	pageStr := c.DefaultQuery("page", "1")
-	pageSizeStr := c.DefaultQuery("page_size", "100")
-
-	page, err := strconv.Atoi(pageStr)
-	if err != nil || page < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的页码参数"})
-		return
-	}
-
-	pageSize, err := strconv.Atoi(pageSizeStr)
-	if err != nil || pageSize < 1 || pageSize > 1000 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的每页数量参数，范围应在1-1000之间"})
-		return
-	}
-
-	// 获取地址的支出数据
-	spendData, err := s.indexer.GetDbAddressFtSpendByTx(address)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			c.JSON(http.StatusOK, gin.H{
-				"address":    address,
-				"spend_data": "",
-				"pagination": gin.H{
-					"current_page": page,
-					"page_size":    pageSize,
-					"total":        0,
-					"total_pages":  0,
-				},
-			})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 将支出数据按逗号分割成数组
-	spendItems := strings.Split(string(spendData), ",")
-	if len(spendItems) == 0 || (len(spendItems) == 1 && spendItems[0] == "") {
-		c.JSON(http.StatusOK, gin.H{
-			"address":    address,
-			"spend_data": "",
-			"pagination": gin.H{
-				"current_page": page,
-				"page_size":    pageSize,
-				"total":        0,
-				"total_pages":  0,
-			},
-		})
-		return
-	}
-
-	// 计算分页
-	total := len(spendItems)
-	start := (page - 1) * pageSize
-	end := start + pageSize
-
-	if start >= total {
-		c.JSON(http.StatusOK, gin.H{
-			"address":    address,
-			"spend_data": "",
-			"pagination": gin.H{
-				"current_page": page,
-				"page_size":    pageSize,
-				"total":        total,
-				"total_pages":  (total + pageSize - 1) / pageSize,
-			},
-		})
-		return
-	}
-
-	if end > total {
-		end = total
-	}
-
-	// 获取当前页的数据
-	pagedItems := spendItems[start:end]
-
-	c.JSON(http.StatusOK, gin.H{
-		"address":    address,
-		"spend_data": strings.Join(pagedItems, ","),
-		"pagination": gin.H{
-			"current_page": page,
-			"page_size":    pageSize,
-			"total":        total,
-			"total_pages":  (total + pageSize - 1) / pageSize,
-		},
-	})
-}
-
-// getFtInfo 获取 FT 信息
-func (s *FtServer) getFtInfo(c *gin.Context) {
-	codeHash := c.Query("codeHash")
-	genesis := c.Query("genesis")
-
-	if codeHash == "" || genesis == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "codeHash 和 genesis 参数都是必须的"})
-		return
-	}
-
-	// 构建查询键
-	key := codeHash + "@" + genesis
-
-	// 获取 FT 信息
-	ftInfo, err := s.indexer.GetFtInfo(key)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			c.JSON(http.StatusOK, gin.H{
-				"codeHash": codeHash,
-				"genesis":  genesis,
-				"error":    "未找到该 FT 信息",
-			})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"codeHash":   ftInfo.CodeHash,
-		"genesis":    ftInfo.Genesis,
-		"sensibleId": ftInfo.SensibleId,
-		"name":       ftInfo.Name,
-		"symbol":     ftInfo.Symbol,
-		"decimal":    ftInfo.Decimal,
-	})
 }
 
 func (s *FtServer) Start(addr string) error {

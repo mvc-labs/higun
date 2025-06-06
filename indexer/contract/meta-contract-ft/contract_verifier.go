@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/contract/meta-contract/decoder"
 	"github.com/metaid/utxo_indexer/storage"
 )
@@ -178,9 +180,13 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	if err != nil {
 		if err == storage.ErrNotFound {
 			// 如果找不到使用记录，说明UTXO未被使用，可以删除
-			return m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
+			err = m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
+			if err != nil {
+				return errors.New("删除未检查的UTXO失败: " + err.Error())
+			}
+			return nil
 		}
-		return err
+		return errors.New("获取使用记录失败: " + err.Error())
 	}
 
 	// 解析UTXO数据
@@ -195,29 +201,39 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	codeHash := utxoParts[1]
 	genesis := utxoParts[2]
 	sensibleId := utxoParts[3]
+	// if outpoint == "ab59d2bc50a8d6bcc7c1234c59af54e4ea6d0eab7d2b57009b6ca85f57c52dec:0" {
+	// 	fmt.Printf("找到：sensibleId: %s, genesis: %s, codeHash: %s, ftAddress: %s\n", sensibleId, genesis, codeHash, ftAddress)
+	// }
+	if sensibleId == "000000000000000000000000000000000000000000000000000000000000000000000000" {
+		// 匹配成功，将UTXO添加到addressFtIncomeValidStore
+		if err := m.addToValidStore(ftAddress, utxoData); err != nil {
+			return errors.New("添加有效UTXO数据失败: " + err.Error())
+		}
+		return m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
+	}
 
 	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(sensibleId)
 	if err != nil {
-		return err
+		return errors.New("解析sensibleId失败: " + err.Error())
 	}
 	tokenHash := ""
 	tokenCodeHash := ""
 	genesisHash := ""
 	genesisCodeHash := ""
 
-	usedOutpoint := genesisTxId + ":" + strconv.Itoa(int(genesisIndex))
+	usedGenesisOutpoint := genesisTxId + ":" + strconv.Itoa(int(genesisIndex))
 
 	//从contractFtGenesisStore获取初始创世UTXO
-	genesisUtxo, err := m.indexer.contractFtGenesisStore.Get([]byte(usedOutpoint))
+	genesisUtxo, err := m.indexer.contractFtGenesisStore.Get([]byte(usedGenesisOutpoint))
 	if err != nil {
 		return err
 	}
 	if len(genesisUtxo) > 0 {
 		//如果有，就从contractFtGenesisOutputStore里面获取
 		// key:usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
-		genesisOutputs, err := m.indexer.contractFtGenesisOutputStore.Get([]byte(usedOutpoint))
+		genesisOutputs, err := m.indexer.contractFtGenesisOutputStore.Get([]byte(usedGenesisOutpoint))
 		if err != nil {
-			return err
+			return errors.New(fmt.Sprintf("获取初始创世UTXO失败[%s][%s]: %s", outpoint, usedGenesisOutpoint, err.Error()))
 		}
 		if len(genesisOutputs) > 0 {
 			genesisOutputParts := strings.Split(string(genesisOutputs), ",")
@@ -329,12 +345,13 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 }
 
 // addToValidStore 添加UTXO到有效存储
+// FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
 func (m *FtVerifyManager) addToValidStore(ftAddress, utxoData string) error {
 	// 获取现有的有效UTXO数据
 	//key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
 	existingData, err := m.indexer.addressFtIncomeValidStore.Get([]byte(ftAddress))
 	if err != nil && err != storage.ErrNotFound {
-		return err
+		return errors.New("获取有效UTXO数据失败: " + err.Error())
 	}
 
 	// 从 utxoData 中提取 txId 和 index
@@ -346,6 +363,20 @@ func (m *FtVerifyManager) addToValidStore(ftAddress, utxoData string) error {
 	txId := utxoParts[5]  // txId 在第6个位置
 	index := utxoParts[6] // index 在第7个位置
 	currentOutpoint := txId + ":" + index
+
+	//newValue: CodeHash@Genesis@Amount@TxID@Index@Value@height
+	newValue := common.ConcatBytesOptimized(
+		[]string{
+			utxoParts[1],
+			utxoParts[2],
+			utxoParts[4],
+			utxoParts[5],
+			utxoParts[6],
+			utxoParts[7],
+			utxoParts[8],
+		},
+		"@",
+	)
 
 	var validUtxos []string
 	if err == nil {
@@ -372,8 +403,12 @@ func (m *FtVerifyManager) addToValidStore(ftAddress, utxoData string) error {
 	}
 
 	// 添加新的UTXO
-	validUtxos = append(validUtxos, utxoData)
+	validUtxos = append(validUtxos, newValue)
 
 	// 更新存储
-	return m.indexer.addressFtIncomeValidStore.Set([]byte(ftAddress), []byte(strings.Join(validUtxos, ",")))
+	err = m.indexer.addressFtIncomeValidStore.Set([]byte(ftAddress), []byte(strings.Join(validUtxos, ",")))
+	if err != nil {
+		return errors.New("更新有效UTXO数据失败: " + err.Error())
+	}
+	return nil
 }
