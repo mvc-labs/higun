@@ -173,7 +173,7 @@ func main() {
 		metaStore)
 
 	// 创建并启动FT验证管理器
-	verifyManager := indexer.NewFtVerifyManager(idx, 1*time.Minute, 1000, params.WorkerCount)
+	verifyManager := indexer.NewFtVerifyManager(idx, 5*time.Second, 1000, params.WorkerCount)
 	if err := verifyManager.Start(); err != nil {
 		log.Printf("启动FT验证管理器失败: %v", err)
 	} else {

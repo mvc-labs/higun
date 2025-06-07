@@ -156,3 +156,9 @@ type FtGenesisUtxoResponse struct {
 		TotalPages  int `json:"total_pages"`
 	} `json:"pagination,omitempty"`
 }
+
+// FtUniqueUTXOsResponse 用于返回唯一的 FT UTXO 列表
+type FtUniqueUTXOsResponse struct {
+	UTXOs []*ft.UniqueFtUtxo `json:"utxos"`
+	Count int                `json:"count"`
+}

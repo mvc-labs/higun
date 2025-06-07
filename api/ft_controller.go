@@ -928,3 +928,21 @@ func (s *FtServer) getUncheckFtOutpointTotal(c *gin.Context) {
 		Total: total,
 	}, time.Now().UnixMilli()-startTime))
 }
+
+func (s *FtServer) getUniqueFtUTXOs(c *gin.Context) {
+	startTime := time.Now().UnixMilli()
+
+	codeHash := c.Query("codeHash")
+	genesis := c.Query("genesis")
+
+	utxos, err := s.indexer.GetUniqueFtUTXOs(codeHash, genesis)
+	if err != nil {
+		c.JSONP(http.StatusInternalServerError, respond.RespErr(err, time.Now().UnixMilli()-startTime, http.StatusInternalServerError))
+		return
+	}
+
+	c.JSONP(http.StatusOK, respond.RespSuccess(respond.FtUniqueUTXOsResponse{
+		UTXOs: utxos,
+		Count: len(utxos),
+	}, time.Now().UnixMilli()-startTime))
+}

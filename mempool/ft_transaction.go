@@ -617,14 +617,45 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 	}
 
 	// 处理创世输出存储
-	if len(usedGenesisUtxoMap) > 0 {
-		txHash := tx.TxHash().String()
-		if config.GlobalConfig.RPC.Chain == "mvc" {
-			txHash, _ = blockchain.GetNewHash(tx)
-		}
+	// if len(usedGenesisUtxoMap) > 0 {
+	// 	//key:outpoint, value:sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value{@IsSpent}
+	// 	for usedTxPoint, _ := range usedGenesisUtxoMap {
+	// 		// 收集该交易的所有输出信息
+	// 		var outputs []string
+	// 		for i, out := range tx.TxOut {
+	// 			pkScriptStr := hex.EncodeToString(out.PkScript)
+	// 			ftInfo, _, _, err := blockchain.ParseContractFtInfo(pkScriptStr, m.chainCfg)
+	// 			if err != nil || ftInfo == nil {
+	// 				continue
+	// 			}
+	// 			//key: usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
+	// 			outputInfo := common.ConcatBytesOptimized([]string{
+	// 				ftInfo.SensibleId,
+	// 				ftInfo.Name,
+	// 				ftInfo.Symbol,
+	// 				strconv.FormatUint(uint64(ftInfo.Decimal), 10),
+	// 				ftInfo.CodeHash,
+	// 				ftInfo.Genesis,
+	// 				strconv.FormatUint(ftInfo.Amount, 10),
+	// 				txId,
+	// 				strconv.Itoa(i),
+	// 				strconv.FormatInt(out.Value, 10),
+	// 			}, "@")
+	// 			outputs = append(outputs, outputInfo)
+	// 		}
 
-		//key:outpoint, value:sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value{@IsSpent}
-		for usedTxPoint, _ := range usedGenesisUtxoMap {
+	// 		if len(outputs) > 0 {
+	// 			outputValue := strings.Join(outputs, ",")
+	// 			if err := m.mempoolContractFtGenesisOutputStore.AddRecord(usedTxPoint, "", []byte(outputValue)); err != nil {
+	// 				log.Printf("[Mempool] 存储FT内存池创世输出失败 %s: %v", txId, err)
+	// 			}
+	// 		}
+	// 	}
+
+	// }
+
+	if len(allTxPoints) > 0 {
+		for _, usedTxPoint := range allTxPoints {
 			// 收集该交易的所有输出信息
 			var outputs []string
 			for i, out := range tx.TxOut {
@@ -642,7 +673,7 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 					ftInfo.CodeHash,
 					ftInfo.Genesis,
 					strconv.FormatUint(ftInfo.Amount, 10),
-					txHash,
+					txId,
 					strconv.Itoa(i),
 					strconv.FormatInt(out.Value, 10),
 				}, "@")
@@ -652,11 +683,10 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 			if len(outputs) > 0 {
 				outputValue := strings.Join(outputs, ",")
 				if err := m.mempoolContractFtGenesisOutputStore.AddRecord(usedTxPoint, "", []byte(outputValue)); err != nil {
-					log.Printf("[Mempool] 存储FT内存池创世输出失败 %s: %v", txHash, err)
+					log.Printf("[Mempool] 存储FT内存池创世输出失败 %s: %v", txId, err)
 				}
 			}
 		}
-
 	}
 
 	return nil
@@ -905,12 +935,17 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 	}
 
 	// 使用basePath和固定表名获取数据库文件路径
-	incomeDbPath := m.basePath + "/mempool_ft_income"
-	spendDbPath := m.basePath + "/mempool_ft_spend"
-	infoDbPath := m.basePath + "/mempool_ft_info"
-	genesisDbPath := m.basePath + "/mempool_ft_genesis"
-	genesisOutputDbPath := m.basePath + "/mempool_ft_genesis_output"
-	genesisUtxoDbPath := m.basePath + "/mempool_ft_genesis_utxo"
+	incomeDbPath := m.basePath + "/mempool_address_ft_income"
+	spendDbPath := m.basePath + "/mempool_address_ft_spend"
+	infoDbPath := m.basePath + "/mempool_contract_ft_info"
+	genesisDbPath := m.basePath + "/mempool_contract_ft_genesis"
+	genesisOutputDbPath := m.basePath + "/mempool_contract_ft_genesis_output"
+	genesisUtxoDbPath := m.basePath + "/mempool_contract_ft_genesis_utxo"
+	incomeValidDbPath := m.basePath + "/mempool_address_ft_income_valid"
+	uncheckFtOutpointDbPath := m.basePath + "/mempool_uncheck_ft_outpoint"
+	usedFtIncomeDbPath := m.basePath + "/mempool_used_ft_income"
+	uniqueFtIncomeDbPath := m.basePath + "/mempool_unique_ft_income"
+	uniqueFtSpendDbPath := m.basePath + "/mempool_unique_ft_spend"
 
 	// 不再尝试检测数据库状态，直接使用defer和recover处理可能的panic
 	defer func() {
@@ -1025,6 +1060,36 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 		return err
 	}
 
+	log.Printf("删除FT内存池收入有效数据库: %s", incomeValidDbPath)
+	if err := os.RemoveAll(incomeValidDbPath); err != nil {
+		log.Printf("删除FT内存池收入有效数据库失败: %v", err)
+		return err
+	}
+
+	log.Printf("删除FT内存池未检查FT输出数据库: %s", uncheckFtOutpointDbPath)
+	if err := os.RemoveAll(uncheckFtOutpointDbPath); err != nil {
+		log.Printf("删除FT内存池未检查FT输出数据库失败: %v", err)
+		return err
+	}
+
+	log.Printf("删除FT内存池已使用收入数据库: %s", usedFtIncomeDbPath)
+	if err := os.RemoveAll(usedFtIncomeDbPath); err != nil {
+		log.Printf("删除FT内存池已使用收入数据库失败: %v", err)
+		return err
+	}
+
+	log.Printf("删除FT内存池Unique收入数据库: %s", uniqueFtIncomeDbPath)
+	if err := os.RemoveAll(uniqueFtIncomeDbPath); err != nil {
+		log.Printf("删除FT内存池Unique收入数据库失败: %v", err)
+		return err
+	}
+
+	log.Printf("删除FT内存池Unique支出数据库: %s", uniqueFtSpendDbPath)
+	if err := os.RemoveAll(uniqueFtSpendDbPath); err != nil {
+		log.Printf("删除FT内存池Unique支出数据库失败: %v", err)
+		return err
+	}
+
 	// 重新创建数据库
 	log.Println("重新创建FT内存池数据库...")
 	mempoolAddressFtIncomeDB, err := storage.NewSimpleDB(incomeDbPath)
@@ -1078,6 +1143,76 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 		return err
 	}
 
+	mempoolAddressFtIncomeValidDB, err := storage.NewSimpleDB(incomeValidDbPath)
+	if err != nil {
+		mempoolAddressFtIncomeDB.Close()
+		mempoolAddressFtSpendDB.Close()
+		mempoolContractFtInfoStore.Close()
+		mempoolContractFtGenesisStore.Close()
+		mempoolContractFtGenesisOutputStore.Close()
+		mempoolContractFtGenesisUtxoStore.Close()
+		log.Printf("重新创建FT内存池收入有效数据库失败: %v", err)
+		return err
+	}
+
+	mempoolUncheckFtOutpointDB, err := storage.NewSimpleDB(uncheckFtOutpointDbPath)
+	if err != nil {
+		mempoolAddressFtIncomeDB.Close()
+		mempoolAddressFtSpendDB.Close()
+		mempoolContractFtInfoStore.Close()
+		mempoolContractFtGenesisStore.Close()
+		mempoolContractFtGenesisOutputStore.Close()
+		mempoolContractFtGenesisUtxoStore.Close()
+		mempoolAddressFtIncomeValidDB.Close()
+		log.Printf("重新创建FT内存池未检查FT输出数据库失败: %v", err)
+		return err
+	}
+
+	mempoolUsedFtIncomeDB, err := storage.NewSimpleDB(usedFtIncomeDbPath)
+	if err != nil {
+		mempoolAddressFtIncomeDB.Close()
+		mempoolAddressFtSpendDB.Close()
+		mempoolContractFtInfoStore.Close()
+		mempoolContractFtGenesisStore.Close()
+		mempoolContractFtGenesisOutputStore.Close()
+		mempoolContractFtGenesisUtxoStore.Close()
+		mempoolAddressFtIncomeValidDB.Close()
+		mempoolUncheckFtOutpointDB.Close()
+		log.Printf("重新创建FT内存池已使用收入数据库失败: %v", err)
+		return err
+	}
+
+	mempoolUniqueFtIncomeDB, err := storage.NewSimpleDB(uniqueFtIncomeDbPath)
+	if err != nil {
+		mempoolAddressFtIncomeDB.Close()
+		mempoolAddressFtSpendDB.Close()
+		mempoolContractFtInfoStore.Close()
+		mempoolContractFtGenesisStore.Close()
+		mempoolContractFtGenesisOutputStore.Close()
+		mempoolContractFtGenesisUtxoStore.Close()
+		mempoolAddressFtIncomeValidDB.Close()
+		mempoolUncheckFtOutpointDB.Close()
+		mempoolUsedFtIncomeDB.Close()
+		log.Printf("重新创建FT内存池Unique收入数据库失败: %v", err)
+		return err
+	}
+
+	mempoolUniqueFtSpendDB, err := storage.NewSimpleDB(uniqueFtSpendDbPath)
+	if err != nil {
+		mempoolAddressFtIncomeDB.Close()
+		mempoolAddressFtSpendDB.Close()
+		mempoolContractFtInfoStore.Close()
+		mempoolContractFtGenesisStore.Close()
+		mempoolContractFtGenesisOutputStore.Close()
+		mempoolContractFtGenesisUtxoStore.Close()
+		mempoolAddressFtIncomeValidDB.Close()
+		mempoolUncheckFtOutpointDB.Close()
+		mempoolUsedFtIncomeDB.Close()
+		mempoolUniqueFtIncomeDB.Close()
+		log.Printf("重新创建FT内存池Unique支出数据库失败: %v", err)
+		return err
+	}
+
 	// 更新数据库引用
 	m.mempoolAddressFtIncomeDB = mempoolAddressFtIncomeDB
 	m.mempoolAddressFtSpendDB = mempoolAddressFtSpendDB
@@ -1085,6 +1220,11 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 	m.mempoolContractFtGenesisStore = mempoolContractFtGenesisStore
 	m.mempoolContractFtGenesisOutputStore = mempoolContractFtGenesisOutputStore
 	m.mempoolContractFtGenesisUtxoStore = mempoolContractFtGenesisUtxoStore
+	m.mempoolAddressFtIncomeValidStore = mempoolAddressFtIncomeValidDB
+	m.mempoolUncheckFtOutpointStore = mempoolUncheckFtOutpointDB
+	m.mempoolUsedFtIncomeStore = mempoolUsedFtIncomeDB
+	m.mempoolUniqueFtIncomeStore = mempoolUniqueFtIncomeDB
+	m.mempoolUniqueFtSpendStore = mempoolUniqueFtSpendDB
 
 	// 重新创建ZMQ客户端
 	if zmqAddress != "" {

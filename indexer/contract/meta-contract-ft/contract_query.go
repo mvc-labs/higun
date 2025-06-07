@@ -58,6 +58,18 @@ type FtInfo struct {
 	Decimal    uint8  `json:"decimal"`
 }
 
+type UniqueFtUtxo struct {
+	Txid          string `json:"txid"`
+	TxIndex       int64  `json:"txIndex"`
+	CodeHash      string `json:"codeHash"`
+	Genesis       string `json:"genesis"`
+	SensibleId    string `json:"sensibleId"`
+	Height        int64  `json:"height"`
+	CustomData    string `json:"customData"`
+	Satoshi       string `json:"satoshi"`
+	SatoshiString string `json:"satoshiString"`
+}
+
 func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (balanceResults []*FtBalance, err error) {
 	addrKey := []byte(address)
 	spendMap := make(map[string]struct{})
@@ -100,7 +112,8 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 	}
 
 	// 获取FT收入数据
-	data, _, err := i.addressFtIncomeStore.GetWithShard(addrKey)
+	// data, _, err := i.addressFtIncomeStore.GetWithShard(addrKey)
+	data, _, err := i.addressFtIncomeValidStore.GetWithShard(addrKey)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, nil
@@ -318,7 +331,8 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 	}
 
 	// 获取FT收入数据
-	data, _, err := i.addressFtIncomeStore.GetWithShard(addrKey)
+	// data, _, err := i.addressFtIncomeStore.GetWithShard(addrKey)
+	data, _, err := i.addressFtIncomeValidStore.GetWithShard(addrKey)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil, nil
@@ -396,7 +410,7 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			Decimal:       ftInfo.Decimal,
 			Address:       address,
 			Height:        height, // 已确认的UTXO
-			Flag:          "confirmed",
+			Flag:          fmt.Sprintf("%s_%d", currTxID, currIndex),
 		})
 	}
 
@@ -447,7 +461,7 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			Decimal:       ftInfo.Decimal,
 			Address:       address,
 			Height:        -1, // 内存池中的UTXO
-			Flag:          "unconfirmed",
+			Flag:          fmt.Sprintf("%s_%d", utxo.TxID, utxo.Index),
 		})
 	}
 
@@ -652,15 +666,15 @@ func (i *ContractFtIndexer) GetDbAddressFtIncomeValid(address string, codeHash s
 		if part == "" {
 			continue
 		}
-		//CodeHash@Genesis@Amount@TxID@Index@Value@height
-		//FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+		// FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+		// CodeHash@Genesis@Amount@TxID@Index@Value@height
 		incomes := strings.Split(part, "@")
-		if len(incomes) < 9 {
+		if len(incomes) < 7 {
 			continue
 		}
 
-		currCodeHash := incomes[1]
-		currGenesis := incomes[2]
+		currCodeHash := incomes[0]
+		currGenesis := incomes[1]
 
 		if (codeHash == "" || currCodeHash == codeHash) && (genesis == "" || currGenesis == genesis) {
 			filteredParts = append(filteredParts, part)
@@ -872,4 +886,99 @@ func (i *ContractFtIndexer) GetUncheckFtOutpointTotal() (int64, error) {
 	}
 
 	return total, nil
+}
+
+// GetUniqueFtUTXOs 获取唯一的 FT UTXO 列表
+func (i *ContractFtIndexer) GetUniqueFtUTXOs(codeHash, genesis string) (utxos []*UniqueFtUtxo, err error) {
+	// 使用 map 来存储唯一的 UTXO
+	uniqueUtxos := make(map[string]*UniqueFtUtxo)
+
+	// 遍历所有分片
+	for _, db := range i.addressFtIncomeStore.GetShards() {
+		iter, err := db.NewIter(&pebble.IterOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("创建迭代器失败: %w", err)
+		}
+		defer iter.Close()
+
+		// 遍历所有键值对
+		for iter.First(); iter.Valid(); iter.Next() {
+			value := string(iter.Value())
+			parts := strings.Split(value, ",")
+
+			for _, part := range parts {
+				if part == "" {
+					continue
+				}
+				//TxID@Index@Value@sensibleId@customData@height
+				incomes := strings.Split(part, "@")
+				if len(incomes) < 7 {
+					continue
+				}
+
+				// 解析数据
+				currCodeHash := incomes[0]
+				currGenesis := incomes[1]
+				currTxID := incomes[3]
+				currIndex := incomes[4]
+				currValue := incomes[5]
+				currHeight := incomes[6]
+				currCustomData := incomes[7]
+
+				// 如果指定了 codeHash 和 genesis，则只处理匹配的
+				if codeHash != "" && codeHash != currCodeHash {
+					continue
+				}
+				if genesis != "" && genesis != currGenesis {
+					continue
+				}
+
+				// 创建唯一键
+				uniqueKey := currCodeHash + "@" + currGenesis + "@" + currTxID + "@" + currIndex
+
+				// 如果已经存在，跳过
+				if _, exists := uniqueUtxos[uniqueKey]; exists {
+					continue
+				}
+
+				// 获取 FT 信息
+				ftInfo, err := i.GetFtInfo(currCodeHash + "@" + currGenesis)
+				if err != nil {
+					continue
+				}
+
+				// 解析高度
+				height, err := strconv.ParseInt(currHeight, 10, 64)
+				if err != nil {
+					continue
+				}
+
+				// 解析索引
+				index, err := strconv.ParseInt(currIndex, 10, 64)
+				if err != nil {
+					continue
+				}
+
+				// 添加到唯一 UTXO 列表
+				uniqueUtxos[uniqueKey] = &UniqueFtUtxo{
+					Txid:          currTxID,
+					TxIndex:       index,
+					CodeHash:      currCodeHash,
+					Genesis:       currGenesis,
+					SensibleId:    ftInfo.SensibleId,
+					Height:        height,
+					CustomData:    currCustomData,
+					Satoshi:       currValue,
+					SatoshiString: currValue,
+				}
+			}
+		}
+	}
+
+	// 将 map 转换为 slice
+	for _, utxo := range uniqueUtxos {
+		utxos = append(utxos, utxo)
+	}
+
+	return utxos, nil
 }
