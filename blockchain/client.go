@@ -1,8 +1,13 @@
 package blockchain
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"math"
+	"net/http"
 	"runtime"
 	"strconv"
 	"time"
@@ -12,6 +17,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/rpcclient"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
 	"github.com/metaid/utxo_indexer/indexer"
@@ -59,6 +65,9 @@ func (c *Client) GetBlock2(hash *chainhash.Hash) (*btcutil.Block, error) {
 func (c *Client) GetBlock(hash *chainhash.Hash) (*btcjson.GetBlockVerboseTxResult, error) {
 	//msgBlock, err := c.rpcClient.GetBlock(hash)
 	return c.rpcClient.GetBlockVerboseTx(hash)
+}
+func (c *Client) GetBlockHeader(hash *chainhash.Hash) (*wire.BlockHeader, error) {
+	return c.rpcClient.GetBlockHeader(hash)
 }
 
 func (c *Client) GetBlockHash(height int64) (*chainhash.Hash, error) {
@@ -225,15 +234,28 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 // 此函数封装了区块处理的通用流程，可被同步和重新索引功能共用
 func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight bool) error {
 	// 获取区块哈希
-	hash, err := c.GetBlockHash(int64(height))
-	if err != nil {
-		return fmt.Errorf("获取区块哈希失败，高度 %d: %w", height, err)
+	var hash *chainhash.Hash
+	var err error
+	for {
+		hash, err = c.GetBlockHash(int64(height))
+		if err != nil {
+			log.Printf("获取区块哈希失败，高度 %d: %v，3秒后重试...", height, err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		break
 	}
 
 	// 获取区块
-	block, err := c.GetBlock(hash)
-	if err != nil {
-		return fmt.Errorf("获取区块失败，高度 %d: %w", height, err)
+	var block *btcjson.GetBlockVerboseTxResult
+	for {
+		block, err = c.GetBlock(hash)
+		if err != nil {
+			log.Printf("获取区块失败，高度 %d: %v，3秒后重试...", height, err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		break
 	}
 
 	// 获取交易总数
@@ -612,4 +634,46 @@ func (c *Client) ConvertBlock(block *btcjson.GetBlockVerboseTxResult, height int
 // ConvertBlockBatch 提供批量区块转换的导出方法
 func (c *Client) ConvertBlockBatch(block *btcjson.GetBlockVerboseTxResult, height int, startIdx int, endIdx int, isLastBatch bool) *indexer.Block {
 	return c.convertBlockBatch(block, height, startIdx, endIdx, isLastBatch)
+}
+
+// GetBlockHeaderWithTimeout 通过 HTTP JSON-RPC 请求节点 getblockheader，带超时
+func (c *Client) GetBlockHeaderWithTimeout(blockHash string, timeout time.Duration) (map[string]interface{}, error) {
+	reqBody := map[string]interface{}{
+		"jsonrpc": "1.0",
+		"id":      "getblockheader",
+		"method":  "getblockheader",
+		"params":  []interface{}{blockHash},
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", "http://"+c.cfg.RPC.Host+":"+c.cfg.RPC.Port, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(c.cfg.RPC.User, c.cfg.RPC.Password)
+
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var respObj struct {
+		Result map[string]interface{} `json:"result"`
+		Error  interface{}            `json:"error"`
+	}
+	if err := json.Unmarshal(respBytes, &respObj); err != nil {
+		return nil, err
+	}
+	if respObj.Error != nil {
+		return nil, fmt.Errorf("rpc error: %v", respObj.Error)
+	}
+	return respObj.Result, nil
 }

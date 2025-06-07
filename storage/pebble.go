@@ -108,6 +108,16 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 	// 		return time.Duration(params.WALSizeMB) * time.Millisecond
 	// 	},
 	// }
+	dbOptions := &pebble.Options{
+		Logger: noopLogger,
+		Levels: []pebble.LevelOptions{
+			{
+				Compression: func() pebble.Compression { return pebble.NoCompression },
+			},
+		},
+		//MemTableSize:                32 << 20, // 降低为32MB (默认64MB)
+		//MemTableStopWritesThreshold: 2,        // 默认4
+	}
 	store := &PebbleStore{
 		shards: make([]*pebble.DB, shardCount),
 	}
@@ -127,7 +137,7 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 			return nil, fmt.Errorf("failed to create db directory: %w", err)
 		}
 
-		db, err := pebble.Open(dbPath, &pebble.Options{Logger: noopLogger})
+		db, err := pebble.Open(dbPath, dbOptions)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open shard %d: %w", i, err)
 		}

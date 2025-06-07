@@ -1,3 +1,4 @@
 utxo_indexer
 data/
 config_mvc.yaml
+blockinfo_data

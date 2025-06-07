@@ -380,7 +380,7 @@ func (m *MempoolManager) InitializeMempool(bcClient interface{}) {
 		log.Printf("从节点获取到 %d 个内存池交易，开始处理...", len(txids))
 
 		// 分批处理交易，每批处理100个，避免一次性占用太多内存
-		batchSize := 100
+		batchSize := 500
 		totalBatches := (len(txids) + batchSize - 1) / batchSize
 
 		for batchIdx := 0; batchIdx < totalBatches; batchIdx++ {

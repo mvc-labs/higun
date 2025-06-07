@@ -48,7 +48,7 @@ func (c *Config) GetChainParams() (*chaincfg.Params, error) {
 	}
 }
 
-func LoadConfig() (*Config, error) {
+func LoadConfig(path string) (*Config, error) {
 	configFlag := flag.String("config", "", "path to config file")
 	flag.Parse()
 	// Default config
@@ -69,7 +69,7 @@ func LoadConfig() (*Config, error) {
 	// Try to load from config file
 	configPath := *configFlag
 	if configPath == "" {
-		configPath = "config.yaml"
+		configPath = path
 	}
 
 	if _, err := os.Stat(configPath); err == nil {

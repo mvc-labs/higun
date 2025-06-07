@@ -55,7 +55,7 @@ func TestDefaultMerger(t *testing.T) {
 	}
 }
 func TestMerger(t *testing.T) {
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestMerger(t *testing.T) {
 }
 
 func TestGetTx(t *testing.T) {
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -115,8 +115,20 @@ func TestGetTx(t *testing.T) {
 		fmt.Println(address, txOut.Value)
 	}
 }
+func TestGetBestBlock(t *testing.T) {
+	cfg, err := config.LoadConfig("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	client, err := blockchain.NewClient(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create blockchain client: %v", err)
+	}
+	cnt, err := client.GetBlockCount()
+	fmt.Println(err, cnt)
+}
 func TestGetBlock(t *testing.T) {
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -191,7 +203,7 @@ func reverseHexString(s string) string {
 }
 
 func TestGetUtxoDb(t *testing.T) {
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}

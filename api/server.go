@@ -17,7 +17,7 @@ import (
 
 type Server struct {
 	indexer     *indexer.UTXOIndexer
-	router      *gin.Engine
+	Router      *gin.Engine
 	mempoolMgr  *mempool.MempoolManager
 	bcClient    *blockchain.Client
 	metaStore   *storage.MetaStore
@@ -30,7 +30,7 @@ func NewServer(indexer *indexer.UTXOIndexer, metaStore *storage.MetaStore, stopC
 	gin.DefaultWriter = io.Discard
 	server := &Server{
 		indexer:     indexer,
-		router:      gin.Default(),
+		Router:      gin.Default(),
 		mempoolInit: false,
 		metaStore:   metaStore,
 		stopCh:      stopCh,
@@ -47,17 +47,17 @@ func (s *Server) SetMempoolManager(mempoolMgr *mempool.MempoolManager, bcClient 
 }
 
 func (s *Server) setupRoutes() {
-	s.router.GET("/balance", s.getBalance)
-	s.router.GET("/utxos", s.getUTXOs)
-	s.router.GET("/utxo/db", s.getUtxoByTx)
-	s.router.GET("/mempool/utxos", s.getMempoolUTXOs)
+	s.Router.GET("/balance", s.getBalance)
+	s.Router.GET("/utxos", s.getUTXOs)
+	s.Router.GET("/utxo/db", s.getUtxoByTx)
+	s.Router.GET("/mempool/utxos", s.getMempoolUTXOs)
 
 	// 添加启动内存池的API
-	s.router.GET("/mempool/start", s.startMempool)
+	s.Router.GET("/mempool/start", s.startMempool)
 	// 内存池重建API
-	s.router.GET("/mempool/rebuild", s.rebuildMempool)
+	s.Router.GET("/mempool/rebuild", s.rebuildMempool)
 	// 重新索引区块API
-	s.router.GET("/blocks/reindex", s.reindexBlocks)
+	s.Router.GET("/blocks/reindex", s.reindexBlocks)
 }
 func (s *Server) StartMempoolCore() error {
 	if s.mempoolMgr == nil || s.bcClient == nil {
@@ -550,7 +550,7 @@ func (s *Server) getMempoolUTXOs(c *gin.Context) {
 
 func (s *Server) Start(addr string) error {
 	// Start the server
-	err := s.router.Run(addr)
+	err := s.Router.Run(addr)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 		return err

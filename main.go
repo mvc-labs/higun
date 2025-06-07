@@ -14,6 +14,7 @@ import (
 	"github.com/metaid/utxo_indexer/blockchain"
 	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
+	"github.com/metaid/utxo_indexer/explorer/blockindexer"
 	"github.com/metaid/utxo_indexer/indexer"
 	"github.com/metaid/utxo_indexer/mempool"
 	"github.com/metaid/utxo_indexer/storage"
@@ -23,12 +24,17 @@ var ApiServer *api.Server
 
 func main() {
 	// Load config
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 	config.GlobalConfig = cfg
 	config.GlobalNetwork, _ = cfg.GetChainParams()
+	//执行区块信息索引
+	fmt.Println("正在初始化区块信息索引...")
+	blockindexer.IndexerInit("blockinfo_data", cfg)
+	go blockindexer.DoBlockInfoIndex()
+	log.Println("0.==============>")
 	// 创建自动配置
 	params := config.AutoConfigure(config.SystemResources{
 		CPUCores:   cfg.CPUCores,
@@ -38,18 +44,21 @@ func main() {
 	})
 	params.MaxTxPerBatch = cfg.MaxTxPerBatch
 	common.InitBytePool(params.BytePoolSizeKB)
+	log.Println("1.==============>")
 	storage.DbInit(params)
+	log.Println("2.==============>")
 	// Initialize storage
 	utxoStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeUTXO, cfg.ShardCount)
 	if err != nil {
 		log.Fatalf("初始化UTXO存储失败: %v", err)
 	}
 	defer utxoStore.Close()
-
+	log.Println("3.==============>")
 	addressStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeIncome, cfg.ShardCount)
 	if err != nil {
 		log.Fatalf("初始化地址存储失败: %v", err)
 	}
+	log.Println("4.==============>")
 	defer addressStore.Close()
 
 	spendStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeSpend, cfg.ShardCount)
@@ -57,6 +66,7 @@ func main() {
 		log.Fatalf("初始化花费存储失败: %v", err)
 	}
 	defer spendStore.Close()
+	log.Println("5.==============>")
 
 	// 创建区块链客户端（提前创建，供内存池清理使用）
 	bcClient, err := blockchain.NewClient(cfg)
@@ -64,14 +74,14 @@ func main() {
 		log.Fatalf("创建区块链客户端失败: %v", err)
 	}
 	defer bcClient.Shutdown()
-
+	log.Println("6.==============>")
 	// 创建元数据存储（提前创建，供内存池清理使用）
 	metaStore, err := storage.NewMetaStore(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("创建元数据存储失败: %v", err)
 	}
 	defer metaStore.Close()
-
+	log.Println("7.==============>")
 	// 验证最后索引高度
 	lastHeight, err := metaStore.Get([]byte("last_indexed_height"))
 	if err == nil {
@@ -132,25 +142,24 @@ func main() {
 	if mempoolMgr != nil {
 		idx.SetMempoolManager(mempoolMgr)
 	}
-
-	// Get current blockchain height
-	var bestHeight int
-	for {
-		bestHeight, err = bcClient.GetBlockCount()
-		if err != nil {
-			log.Printf("获取区块数量失败: %v，3秒后重试...", err)
-			time.Sleep(3 * time.Second)
-			continue
-		}
-		break
-	}
-
 	// Start API server with Gin
 	ApiServer = api.NewServer(idx, metaStore, stopCh)
 	// 将内存池管理器和区块链客户端传递给API服务器
 	ApiServer.SetMempoolManager(mempoolMgr, bcClient)
 	log.Printf("启动UTXO索引器API，端口:%s", cfg.APIPort)
+	blockindexer.SetRouter(ApiServer)
 	go ApiServer.Start(fmt.Sprintf(":%s", cfg.APIPort))
+	// Get current blockchain height
+	var bestHeight int
+	//for {
+	bestHeight, err = bcClient.GetBlockCount()
+	if err != nil {
+		log.Printf("获取区块数量失败: %v，3秒后重试...", err)
+		//time.Sleep(3 * time.Second)
+		//continue
+	}
+	//	break
+	//}
 
 	lastHeightInt, err := strconv.Atoi(string(lastHeight))
 	if err != nil {
@@ -165,7 +174,7 @@ func main() {
 	checkInterval := 10 * time.Second
 
 	log.Println("开始区块同步...")
-	log.Println("注意: 内存池未自动启动，请在区块同步完成后使用API '/mempool/start'启动内存池")
+	//log.Println("注意: 内存池未自动启动，请在区块同步完成后使用API '/mempool/start'启动内存池")
 
 	// 使用goroutine启动区块同步，不再自动启动内存池
 	go func() {
