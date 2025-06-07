@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -8,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/metaid/utxo_indexer/api/respond"
+	"github.com/metaid/utxo_indexer/common"
 	indexer "github.com/metaid/utxo_indexer/indexer/contract/meta-contract-ft"
 
 	"github.com/gin-gonic/gin"
@@ -78,6 +81,10 @@ func (s *FtServer) setupRoutes() {
 	s.router.GET("/ft/mempool/rebuild", s.rebuildMempool)
 	// 重新索引区块API
 	s.router.GET("/ft/blocks/reindex", s.reindexBlocks)
+
+	// 添加新的内存池查询接口
+	s.router.GET("/db/ft/mempool/verify/tx", s.getMempoolVerifyTx)
+	s.router.GET("/db/ft/mempool/uncheck/utxo", s.getMempoolUncheckFtUtxo)
 }
 
 // 启动内存池API
@@ -118,9 +125,9 @@ func (s *FtServer) startMempool(c *gin.Context) {
 
 	// 初始化内存池数据（加载现有内存池交易）
 	go func() {
-		log.Println("开始初始化内存池数据...")
+		log.Println("开始初始化FT内存池数据...")
 		s.mempoolMgr.InitializeMempool(s.bcClient)
-		log.Println("内存池数据初始化完成")
+		log.Println("FT内存池数据初始化完成")
 	}()
 
 	// 获取当前索引高度作为清理起始高度
@@ -414,6 +421,125 @@ func (s *FtServer) reindexBlocks(c *gin.Context) {
 
 		log.Printf("重新索引完成，处理了 %d 个区块，从高度 %d 到 %d", blocksToProcess, startHeight, endHeight)
 	}()
+}
+
+// getMempoolVerifyTx 获取内存池验证交易信息
+func (s *FtServer) getMempoolVerifyTx(c *gin.Context) {
+	startTime := time.Now().UnixMilli()
+	txId := c.Query("txId")
+
+	// 检查内存池管理器是否已配置
+	if s.mempoolMgr == nil {
+		c.JSONP(http.StatusInternalServerError, respond.RespErr(errors.New("内存池管理器未配置"), time.Now().UnixMilli()-startTime, http.StatusInternalServerError))
+		return
+	}
+
+	// 获取分页参数
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+
+	// 获取验证交易信息
+	txs, total, err := s.mempoolMgr.GetVerifyTx(txId, page, pageSize)
+	if err != nil {
+		c.JSONP(http.StatusInternalServerError, respond.RespErr(err, time.Now().UnixMilli()-startTime, http.StatusInternalServerError))
+		return
+	}
+
+	// 计算总页数
+	totalPages := (total + pageSize - 1) / pageSize
+
+	c.JSONP(http.StatusOK, respond.RespSuccess(gin.H{
+		"txs": txs,
+		"pagination": struct {
+			CurrentPage int `json:"current_page"`
+			PageSize    int `json:"page_size"`
+			Total       int `json:"total"`
+			TotalPages  int `json:"total_pages"`
+		}{
+			CurrentPage: page,
+			PageSize:    pageSize,
+			Total:       total,
+			TotalPages:  totalPages,
+		},
+	}, time.Now().UnixMilli()-startTime))
+}
+
+// getMempoolUncheckFtUtxo 获取内存池未检查的FT UTXO信息
+func (s *FtServer) getMempoolUncheckFtUtxo(c *gin.Context) {
+	startTime := time.Now().UnixMilli()
+	outpoint := c.Query("outpoint")
+
+	// 检查内存池管理器是否已配置
+	if s.mempoolMgr == nil {
+		c.JSONP(http.StatusInternalServerError, respond.RespErr(errors.New("内存池管理器未配置"), time.Now().UnixMilli()-startTime, http.StatusInternalServerError))
+		return
+	}
+
+	// 获取分页参数
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+
+	// 获取未检查的FT UTXO列表
+	utxoList, err := s.mempoolMgr.GetUncheckFtUtxo()
+	if err != nil {
+		c.JSONP(http.StatusInternalServerError, respond.RespErr(err, time.Now().UnixMilli()-startTime, http.StatusInternalServerError))
+		return
+	}
+
+	// 如果提供了outpoint，过滤结果
+	if outpoint != "" {
+		filteredList := make([]common.FtUtxo, 0)
+		for _, utxo := range utxoList {
+			if utxo.TxID+":"+utxo.Index == outpoint {
+				filteredList = append(filteredList, utxo)
+				break
+			}
+		}
+		utxoList = filteredList
+	}
+
+	// 计算分页
+	total := len(utxoList)
+	totalPages := (total + pageSize - 1) / pageSize
+
+	// 获取当前页的数据
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	// 提取当前页的数据
+	currentPageData := utxoList[start:end]
+
+	c.JSONP(http.StatusOK, respond.RespSuccess(gin.H{
+		"utxos": currentPageData,
+		"pagination": struct {
+			CurrentPage int `json:"current_page"`
+			PageSize    int `json:"page_size"`
+			Total       int `json:"total"`
+			TotalPages  int `json:"total_pages"`
+		}{
+			CurrentPage: page,
+			PageSize:    pageSize,
+			Total:       total,
+			TotalPages:  totalPages,
+		},
+	}, time.Now().UnixMilli()-startTime))
 }
 
 func (s *FtServer) Start(addr string) error {

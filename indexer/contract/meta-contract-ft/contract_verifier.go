@@ -210,7 +210,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		}
 		return errors.New("获取使用记录失败: " + err.Error())
 	}
-	fmt.Printf("找到[%s]的usedData: %s\n", txId, string(usedData))
+	// fmt.Printf("找到[%s]的usedData: %s\n", txId, string(usedData))
 
 	// 获取UTXO的关键信息
 	ftAddress := utxoParts[0]
@@ -227,7 +227,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		}
 		return m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
 	}
-	fmt.Printf("sensibleId: %s\n", sensibleId)
+	// fmt.Printf("sensibleId: %s\n", sensibleId)
 
 	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(sensibleId)
 	if err != nil {
@@ -245,7 +245,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("找到[%s]的genesisUtxo: %s\n", usedGenesisOutpoint, string(genesisUtxo))
+	// fmt.Printf("找到[%s]的genesisUtxo: %s\n", usedGenesisOutpoint, string(genesisUtxo))
 	if len(genesisUtxo) > 0 {
 		//如果有，就从contractFtGenesisOutputStore里面获取
 		// key:usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
@@ -253,7 +253,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		if err != nil {
 			return errors.New(fmt.Sprintf("获取初始创世UTXO失败[%s][%s]: %s", outpoint, usedGenesisOutpoint, err.Error()))
 		}
-		fmt.Printf("找到[%s]的genesisOutputs: %s\n", usedGenesisOutpoint, string(genesisOutputs))
+		// fmt.Printf("找到[%s]的genesisOutputs: %s\n", usedGenesisOutpoint, string(genesisOutputs))
 		if len(genesisOutputs) > 0 {
 			genesisOutputParts := strings.Split(string(genesisOutputs), ",")
 			for _, genesisOutput := range genesisOutputParts {

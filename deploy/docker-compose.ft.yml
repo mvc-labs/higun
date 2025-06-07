@@ -18,10 +18,4 @@ services:
       resources:
         limits:
           cpus: '4'
-          memory: 8G
-    networks:
-      - ft-utxo-network
-
-networks:
-  ft-utxo-network:
-    driver: bridge 
+          memory: 8G 

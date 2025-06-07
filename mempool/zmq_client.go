@@ -91,16 +91,20 @@ func (c *ZMQClient) Stop() {
 func (c *ZMQClient) listen() {
 	defer c.wg.Done()
 
+	log.Printf("开始初始化ZMQ客户端监听: %s", c.address)
 	for {
 		select {
 		case <-c.ctx.Done():
+			log.Println("收到停止信号，ZMQ客户端正在关闭...")
 			return
 		default:
 			// 创建一个新的socket
+			log.Printf("正在创建新的ZMQ socket...")
 			socket := zmq4.NewSub(c.ctx)
 			defer socket.Close()
 
 			// 连接到ZMQ服务器
+			log.Printf("正在尝试连接到ZMQ服务器: %s", c.address)
 			if err := socket.Dial(c.address); err != nil {
 				log.Printf("连接ZMQ服务器失败: %v, 将在%v后重试",
 					err, c.reconnectInterval)
@@ -109,16 +113,19 @@ func (c *ZMQClient) listen() {
 			}
 
 			// 订阅所有主题
+			log.Printf("开始订阅主题: %v", c.topics)
 			for _, topic := range c.topics {
 				if err := socket.SetOption(zmq4.OptionSubscribe, topic); err != nil {
 					log.Printf("订阅主题 %s 失败: %v", topic, err)
 					continue
 				}
+				log.Printf("成功订阅主题: %s", topic)
 			}
 
 			log.Printf("成功连接到ZMQ服务器: %s", c.address)
 
 			// 接收消息循环
+			log.Println("开始接收消息...")
 			c.receiveMessages(socket)
 
 			// 如果receiveMessages返回，说明连接断开或出错，重新连接

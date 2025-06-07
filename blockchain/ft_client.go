@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcjson"
+	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/rpcclient"
@@ -62,6 +63,34 @@ func (c *FtClient) GetBlockHash(height int64) (*chainhash.Hash, error) {
 		return nil, fmt.Errorf("failed to get block hash at height %d: %w", height, err)
 	}
 	return hash, nil
+}
+
+// GetRawMempool 获取内存池中的所有交易ID
+func (c *FtClient) GetRawMempool() ([]string, error) {
+	hashes, err := c.rpcClient.GetRawMempool()
+	if err != nil {
+		return nil, fmt.Errorf("获取内存池交易列表失败: %w", err)
+	}
+
+	// 将哈希转换为字符串
+	txids := make([]string, len(hashes))
+	for i, hash := range hashes {
+		txids[i] = hash.String()
+	}
+
+	return txids, nil
+}
+
+func (c *FtClient) GetRawTransaction(txHashStr string) (*btcutil.Tx, error) {
+	txHash, err := chainhash.NewHashFromStr(txHashStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse transaction hash %s: %w", txHashStr, err)
+	}
+	tx, err := c.rpcClient.GetRawTransaction(txHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transaction %s: %w", txHash, err)
+	}
+	return tx, nil
 }
 
 func (c *FtClient) GetBlockCount() (int, error) {

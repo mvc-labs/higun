@@ -40,9 +40,10 @@ type FtMempoolManager struct {
 	mempoolUniqueFtIncomeStore *storage.SimpleDB // 内存池唯一FT收入数据库  key: outpoint+ftCodehashGenesis, value: codeHash@genesis@sensibleId@customData@Index@Value
 	mempoolUniqueFtSpendStore  *storage.SimpleDB // 内存池唯一FT支出数据库  key: outpoint+ftCodehashGenesis, value: CodeHash@Genesis@sensibleId@customData@Index@Value
 
-	chainCfg  *chaincfg.Params
-	zmqClient *ZMQClient
-	basePath  string // 数据目录基础路径
+	mempoolVerifyTxStore *storage.SimpleDB // key: txId, value: ""
+	chainCfg             *chaincfg.Params
+	zmqClient            *ZMQClient
+	basePath             string // 数据目录基础路径
 }
 
 // NewFtMempoolManager 创建一个新的FT内存池管理器
@@ -175,6 +176,23 @@ func NewFtMempoolManager(basePath string,
 		return nil
 	}
 
+	mempoolVerifyTxStore, err := storage.NewSimpleDB(basePath + "/mempool_verify_tx")
+	if err != nil {
+		log.Printf("创建FT内存池唯一FT支出数据库失败: %v", err)
+		mempoolAddressFtIncomeDB.Close()
+		mempoolAddressFtSpendDB.Close()
+		mempoolContractFtInfoStore.Close()
+		mempoolContractFtGenesisStore.Close()
+		mempoolContractFtGenesisOutputStore.Close()
+		mempoolContractFtGenesisUtxoStore.Close()
+		mempoolAddressFtIncomeValidStore.Close()
+		mempoolUncheckFtOutpointStore.Close()
+		mempoolUsedFtIncomeStore.Close()
+		mempoolUniqueFtIncomeStore.Close()
+		mempoolUniqueFtSpendStore.Close()
+		return nil
+	}
+
 	m := &FtMempoolManager{
 		contractFtUtxoStore:                 contractFtUtxoStore,
 		mempoolAddressFtIncomeDB:            mempoolAddressFtIncomeDB,
@@ -192,6 +210,7 @@ func NewFtMempoolManager(basePath string,
 		mempoolUsedFtIncomeStore:            mempoolUsedFtIncomeStore,
 		mempoolUniqueFtIncomeStore:          mempoolUniqueFtIncomeStore,
 		mempoolUniqueFtSpendStore:           mempoolUniqueFtSpendStore,
+		mempoolVerifyTxStore:                mempoolVerifyTxStore,
 		chainCfg:                            chainCfg,
 		basePath:                            basePath,
 	}
@@ -246,6 +265,9 @@ func (m *FtMempoolManager) Stop() {
 	if m.mempoolUniqueFtSpendStore != nil {
 		m.mempoolUniqueFtSpendStore.Close()
 	}
+	if m.mempoolVerifyTxStore != nil {
+		m.mempoolVerifyTxStore.Close()
+	}
 }
 
 // HandleRawTransaction 处理原始交易数据
@@ -255,11 +277,15 @@ func (m *FtMempoolManager) HandleRawTransaction(topic string, data []byte) error
 	if err != nil {
 		return fmt.Errorf("解析交易失败: %w", err)
 	}
+	fmt.Printf("ZMQ收到交易: %s\n", tx.TxHash().String())
 
 	// 2. 处理交易输出，创建新的FT UTXO
-	err = m.processFtOutputs(tx)
+	isFtTx, err := m.processFtOutputs(tx)
 	if err != nil {
 		return fmt.Errorf("处理FT交易输出失败: %w", err)
+	}
+	if isFtTx {
+		fmt.Printf("ZMQ收到FT交易: %s\n", tx.TxHash().String())
 	}
 
 	// 3. 处理交易输入，标记花费的FT UTXO
@@ -268,15 +294,43 @@ func (m *FtMempoolManager) HandleRawTransaction(topic string, data []byte) error
 		return fmt.Errorf("处理FT交易输入失败: %w", err)
 	}
 
+	// 4. 处理VerifyTx
+	err = m.processVerifyTx(tx)
+	if err != nil {
+		return fmt.Errorf("处理VerifyTx失败: %w", err)
+	}
+
 	return nil
 }
 
-// processFtOutputs 处理FT交易输出，创建新的UTXO
-func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) error {
+func (m *FtMempoolManager) processVerifyTx(tx *wire.MsgTx) error {
 	txHash := tx.TxHash().String()
 	if config.GlobalConfig.RPC.Chain == "mvc" {
 		txHash, _ = blockchain.GetNewHash(tx)
 	}
+
+	verifyTxKey := common.ConcatBytesOptimized([]string{txHash}, ":")
+
+	// 先检查主存储中是否存在
+	_, err := m.mempoolVerifyTxStore.Get(verifyTxKey)
+	if err == storage.ErrNotFound {
+		// 主存储中不存在，添加到内存池存储
+		err = m.mempoolVerifyTxStore.AddRecord(verifyTxKey, "", []byte(""))
+		if err != nil {
+			return fmt.Errorf("存储VerifyTx失败: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// processFtOutputs 处理FT交易输出，创建新的UTXO
+func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) (bool, error) {
+	txHash := tx.TxHash().String()
+	if config.GlobalConfig.RPC.Chain == "mvc" {
+		txHash, _ = blockchain.GetNewHash(tx)
+	}
+	isFtTx := false
 
 	// 处理每个输出
 	for i, out := range tx.TxOut {
@@ -288,9 +342,10 @@ func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) error {
 		ftInfo, uniqueUtxoInfo, contractTypeStr, err := blockchain.ParseContractFtInfo(pkScriptStr, m.chainCfg)
 		if err != nil {
 			fmt.Println("ParseFtInfo error", err)
-			return nil
+			return isFtTx, nil
 		}
 		if contractTypeStr == "ft" {
+			isFtTx = true
 			if ftInfo == nil {
 				continue
 			}
@@ -374,6 +429,7 @@ func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) error {
 			}
 
 		} else if contractTypeStr == "unique" {
+			isFtTx = true
 			if uniqueUtxoInfo == nil {
 				continue
 			}
@@ -395,7 +451,7 @@ func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) error {
 
 	}
 
-	return nil
+	return isFtTx, nil
 }
 
 // processFtInputs 处理FT交易输入
@@ -693,7 +749,14 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 }
 
 // ProcessNewBlockTxs 处理新区块中的FT交易，清理内存池记录
-func (m *FtMempoolManager) ProcessNewBlockTxs(incomeUtxoList []common.FtUtxo, spendOutpointList []string) error {
+func (m *FtMempoolManager) ProcessNewBlockTxs(incomeUtxoList []common.FtUtxo, spendOutpointList []string, txList []string) error {
+	// 删除VerifyTx
+	for _, tx := range txList {
+		err := m.mempoolVerifyTxStore.DeleteRecord(tx, "")
+		if err != nil {
+			log.Printf("删除VerifyTx失败 %s: %v", tx, err)
+		}
+	}
 	if len(incomeUtxoList) == 0 {
 		return nil
 	}
@@ -772,7 +835,7 @@ func (m *FtMempoolManager) CleanByHeight(height int, bcClient interface{}) error
 	log.Printf("开始清理FT内存池，处理到区块高度: %d", height)
 
 	// 尝试断言bcClient为blockchain.Client类型
-	client, ok := bcClient.(*blockchain.Client)
+	client, ok := bcClient.(*blockchain.FtClient)
 	if !ok {
 		return fmt.Errorf("不支持的区块链客户端类型")
 	}
@@ -789,10 +852,13 @@ func (m *FtMempoolManager) CleanByHeight(height int, bcClient interface{}) error
 		return fmt.Errorf("获取区块信息失败: %w", err)
 	}
 
+	txList := make([]string, 0)
+
 	// 提取incomeUtxo列表
 	var incomeFtUtxoList []common.FtUtxo = make([]common.FtUtxo, 0)
 	var spendOutpointList []string
 	for _, tx := range block.Tx {
+		txList = append(txList, tx.Txid)
 		for _, in := range tx.Vin {
 			preTxId := in.Txid
 			if preTxId == "" {
@@ -852,7 +918,7 @@ func (m *FtMempoolManager) CleanByHeight(height int, bcClient interface{}) error
 	}
 
 	// 清理内存池记录
-	return m.ProcessNewBlockTxs(incomeFtUtxoList, spendOutpointList)
+	return m.ProcessNewBlockTxs(incomeFtUtxoList, spendOutpointList, txList)
 }
 
 // InitializeMempool 在启动时从节点获取当前所有内存池交易并处理
@@ -862,7 +928,7 @@ func (m *FtMempoolManager) InitializeMempool(bcClient interface{}) {
 		log.Printf("开始初始化FT内存池数据...")
 
 		// 断言为blockchain.Client
-		client, ok := bcClient.(*blockchain.Client)
+		client, ok := bcClient.(*blockchain.FtClient)
 		if !ok {
 			log.Printf("初始化FT内存池失败: 不支持的区块链客户端类型")
 			return
@@ -904,14 +970,24 @@ func (m *FtMempoolManager) InitializeMempool(bcClient interface{}) {
 				msgTx := tx.MsgTx()
 
 				// 先处理输出（创建新的UTXO）
-				if err := m.processFtOutputs(msgTx); err != nil {
+				isFtTx, err := m.processFtOutputs(msgTx)
+				if err != nil {
 					log.Printf("处理FT交易输出失败 %s: %v", txid, err)
 					continue
+				}
+				if isFtTx {
+					fmt.Printf("内存池收到FT交易: %s\n", txid)
 				}
 
 				// 再处理输入（标记花费的UTXO）
 				if err := m.processFtInputs(msgTx); err != nil {
 					log.Printf("处理FT交易输入失败 %s: %v", txid, err)
+					continue
+				}
+
+				// 处理VerifyTx
+				if err := m.processVerifyTx(msgTx); err != nil {
+					log.Printf("处理VerifyTx失败 %s: %v", txid, err)
 					continue
 				}
 			}
@@ -946,6 +1022,7 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 	usedFtIncomeDbPath := m.basePath + "/mempool_used_ft_income"
 	uniqueFtIncomeDbPath := m.basePath + "/mempool_unique_ft_income"
 	uniqueFtSpendDbPath := m.basePath + "/mempool_unique_ft_spend"
+	mempoolVerifyTxDbPath := m.basePath + "/mempool_verify_tx"
 
 	// 不再尝试检测数据库状态，直接使用defer和recover处理可能的panic
 	defer func() {
@@ -1023,6 +1100,72 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 		}
 	}()
 
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("关闭收入有效数据库时发生错误: %v", r)
+			}
+		}()
+		if m.mempoolAddressFtIncomeValidStore != nil {
+			m.mempoolAddressFtIncomeValidStore.Close()
+		}
+	}()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("关闭未检查FT输出数据库时发生错误: %v", r)
+			}
+		}()
+		if m.mempoolUncheckFtOutpointStore != nil {
+			m.mempoolUncheckFtOutpointStore.Close()
+		}
+	}()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("关闭已使用收入数据库时发生错误: %v", r)
+			}
+		}()
+		if m.mempoolUsedFtIncomeStore != nil {
+			m.mempoolUsedFtIncomeStore.Close()
+		}
+	}()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("关闭Unique收入数据库时发生错误: %v", r)
+			}
+		}()
+		if m.mempoolUniqueFtIncomeStore != nil {
+			m.mempoolUniqueFtIncomeStore.Close()
+		}
+	}()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("关闭Unique支出数据库时发生错误: %v", r)
+			}
+		}()
+		if m.mempoolUniqueFtSpendStore != nil {
+			m.mempoolUniqueFtSpendStore.Close()
+		}
+	}()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("关闭VerifyTx数据库时发生错误: %v", r)
+			}
+		}()
+		if m.mempoolVerifyTxStore != nil {
+			m.mempoolVerifyTxStore.Close()
+		}
+	}()
+
 	// 删除物理文件
 	log.Printf("删除FT内存池收入数据库: %s", incomeDbPath)
 	if err := os.RemoveAll(incomeDbPath); err != nil {
@@ -1086,6 +1229,12 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 
 	log.Printf("删除FT内存池Unique支出数据库: %s", uniqueFtSpendDbPath)
 	if err := os.RemoveAll(uniqueFtSpendDbPath); err != nil {
+		log.Printf("删除FT内存池Unique支出数据库失败: %v", err)
+		return err
+	}
+
+	log.Printf("删除FT内存池Unique支出数据库: %s", mempoolVerifyTxDbPath)
+	if err := os.RemoveAll(mempoolVerifyTxDbPath); err != nil {
 		log.Printf("删除FT内存池Unique支出数据库失败: %v", err)
 		return err
 	}
@@ -1213,6 +1362,23 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 		return err
 	}
 
+	mempoolVerifyTxDB, err := storage.NewSimpleDB(mempoolVerifyTxDbPath)
+	if err != nil {
+		mempoolAddressFtIncomeDB.Close()
+		mempoolAddressFtSpendDB.Close()
+		mempoolContractFtInfoStore.Close()
+		mempoolContractFtGenesisStore.Close()
+		mempoolContractFtGenesisOutputStore.Close()
+		mempoolContractFtGenesisUtxoStore.Close()
+		mempoolAddressFtIncomeValidDB.Close()
+		mempoolUncheckFtOutpointDB.Close()
+		mempoolUsedFtIncomeDB.Close()
+		mempoolUniqueFtIncomeDB.Close()
+		mempoolUniqueFtSpendDB.Close()
+		log.Printf("重新创建FT内存池Unique支出数据库失败: %v", err)
+		return err
+	}
+
 	// 更新数据库引用
 	m.mempoolAddressFtIncomeDB = mempoolAddressFtIncomeDB
 	m.mempoolAddressFtSpendDB = mempoolAddressFtSpendDB
@@ -1225,6 +1391,7 @@ func (m *FtMempoolManager) CleanAllMempool() error {
 	m.mempoolUsedFtIncomeStore = mempoolUsedFtIncomeDB
 	m.mempoolUniqueFtIncomeStore = mempoolUniqueFtIncomeDB
 	m.mempoolUniqueFtSpendStore = mempoolUniqueFtSpendDB
+	m.mempoolVerifyTxStore = mempoolVerifyTxDB
 
 	// 重新创建ZMQ客户端
 	if zmqAddress != "" {

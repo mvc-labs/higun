@@ -11,6 +11,7 @@ import (
 	"time"
 
 	indexer "github.com/metaid/utxo_indexer/indexer/contract/meta-contract-ft"
+	"github.com/metaid/utxo_indexer/mempool"
 
 	"github.com/metaid/utxo_indexer/api"
 	"github.com/metaid/utxo_indexer/blockchain"
@@ -181,6 +182,31 @@ func main() {
 	}
 	defer verifyManager.Stop()
 
+	// 创建内存池管理器，但不启动
+	log.Printf("初始化内存池管理器，ZMQ地址: %s, 网络: %s", cfg.ZMQAddress, cfg.Network)
+	mempoolMgr := mempool.NewFtMempoolManager(cfg.DataDir,
+		contractFtUtxoStore,
+		contractFtInfoStore,
+		contractFtGenesisStore,
+		contractFtGenesisOutputStore,
+		contractFtGenesisUtxoStore,
+		config.GlobalNetwork, cfg.ZMQAddress)
+	if mempoolMgr == nil {
+		log.Printf("创建内存池管理器失败")
+	}
+	// 设置内存池管理器，让indexer能够查询内存池UTXO
+	if mempoolMgr != nil {
+		idx.SetMempoolManager(mempoolMgr)
+	}
+	// 创建并启动FT验证管理器
+	mempoolVerifyManager := mempool.NewFtMempoolVerifier(mempoolMgr, 5*time.Second, 1000, params.WorkerCount)
+	if err := mempoolVerifyManager.Start(); err != nil {
+		log.Printf("启动内存池FT验证管理器失败: %v", err)
+	} else {
+		log.Println("内存池FT验证管理器已启动")
+	}
+	defer mempoolVerifyManager.Stop()
+
 	// 获取当前区块链高度
 	bestHeight, err := bcClient.GetBlockCount()
 	if err != nil {
@@ -190,6 +216,7 @@ func main() {
 	// 启动API服务器
 	server := api.NewFtServer(bcClient, idx, metaStore, stopCh)
 	log.Printf("启动FT-UTXO索引器API，端口:%s", cfg.APIPort)
+	server.SetMempoolManager(mempoolMgr, bcClient)
 	go server.Start(fmt.Sprintf(":%s", cfg.APIPort))
 
 	lastHeightInt, err := strconv.Atoi(string(lastHeight))
@@ -203,6 +230,7 @@ func main() {
 
 	// 检查新区块的间隔时间
 	checkInterval := 10 * time.Second
+	log.Printf("同步索引到%d高度\n", lastHeightInt)
 
 	log.Println("开始FT区块同步...")
 

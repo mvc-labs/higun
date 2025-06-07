@@ -404,3 +404,61 @@ func (s *SimpleDB) DeleteSpendRecord(utxoID string) error {
 
 // 	return nil
 // }
+
+// GetFtUtxo 获取所有FT UTXO记录
+func (s *SimpleDB) GetFtUtxo() (ftUtxoList []common.FtUtxo, err error) {
+	// 创建迭代器
+	iter, err := s.db.NewIter(&pebble.IterOptions{})
+	if err != nil {
+		return
+	}
+	defer iter.Close()
+
+	// 遍历所有记录
+	for iter.First(); iter.Valid(); iter.Next() {
+		utxo := common.FtUtxo{}
+		// 提取地址部分(在_之后的部分)
+		keyParts := strings.Split(string(iter.Key()), "_")
+		if len(keyParts) == 2 {
+			utxo.Address = keyParts[0]
+			utxo.UtxoId = keyParts[1]
+
+			utxoIdStrs := strings.Split(utxo.UtxoId, ":")
+			if len(utxoIdStrs) == 2 {
+				utxo.TxID = utxoIdStrs[0]
+				utxo.Index = utxoIdStrs[1]
+			}
+		}
+
+		// 获取键对应的值
+		valueData := string(iter.Value())
+		valueParts := strings.Split(valueData, "@")
+		if len(valueParts) == 6 {
+			utxo.CodeHash = valueParts[0]
+			utxo.Genesis = valueParts[1]
+			utxo.SensibleId = valueParts[2]
+			utxo.Amount = valueParts[3]
+			utxo.Index = valueParts[4]
+			utxo.Value = valueParts[5]
+		}
+		ftUtxoList = append(ftUtxoList, utxo)
+	}
+	return
+}
+
+// GetAll 获取所有记录
+func (s *SimpleDB) GetAll() ([]string, error) {
+	// 创建迭代器
+	iter, err := s.db.NewIter(&pebble.IterOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var values []string
+	// 遍历所有记录
+	for iter.First(); iter.Valid(); iter.Next() {
+		values = append(values, string(iter.Value()))
+	}
+	return values, nil
+}

@@ -6,6 +6,7 @@ import (
 	indexer "github.com/metaid/utxo_indexer/indexer/contract/meta-contract-ft"
 
 	"github.com/metaid/utxo_indexer/common"
+	"github.com/metaid/utxo_indexer/storage"
 )
 
 // 确保FtMempoolManager实现了ft.MempoolManager接口
@@ -62,4 +63,48 @@ func (m *FtMempoolManager) getFtInfoByCodeHashGenesis(codeHash string, genesis s
 		return nil, err
 	}
 	return ftInfo, nil
+}
+
+// GetVerifyTx 获取验证交易信息
+func (m *FtMempoolManager) GetVerifyTx(txId string, page, pageSize int) ([]string, int, error) {
+	if txId != "" {
+		// 如果提供了 txId，只返回该交易的信息
+		value, err := m.mempoolVerifyTxStore.Get(txId + "_")
+		if err != nil {
+			if err == storage.ErrNotFound {
+				return []string{}, 0, nil
+			}
+			return nil, 0, err
+		}
+		return []string{value}, 1, nil
+	}
+
+	// 获取所有验证交易
+	values, err := m.mempoolVerifyTxStore.GetAll()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	total := len(values)
+	if total == 0 {
+		return []string{}, 0, nil
+	}
+
+	// 计算分页
+	start := (page - 1) * pageSize
+	if start >= total {
+		return []string{}, total, nil
+	}
+
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	return values[start:end], total, nil
+}
+
+// GetUncheckFtUtxo 获取未检查的FT UTXO列表
+func (m *FtMempoolManager) GetUncheckFtUtxo() ([]common.FtUtxo, error) {
+	return m.mempoolUncheckFtOutpointStore.GetFtUtxo()
 }

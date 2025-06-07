@@ -87,7 +87,7 @@ func (m *FtMempoolVerifier) verifyMempoolFtUtxos() error {
 	uncheckData := make(map[string]string)
 
 	// 获取所有未检查的UTXO
-	utxoList, err := m.mempoolManager.mempoolUncheckFtOutpointStore.GetFtUtxoByKey("")
+	utxoList, err := m.mempoolManager.mempoolUncheckFtOutpointStore.GetFtUtxo()
 	if err != nil {
 		return fmt.Errorf("获取未检查UTXO失败: %w", err)
 	}
@@ -172,6 +172,15 @@ func (m *FtMempoolVerifier) verifyWorker(utxoChan <-chan struct {
 func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 	// 解析outpoint获取txId
 	txId := strings.Split(outpoint, ":")[0]
+
+	_, err := m.mempoolManager.mempoolVerifyTxStore.Get(txId + "_")
+	if err != nil {
+		if err == storage.ErrNotFound {
+			return nil
+		}
+		return err
+	}
+	fmt.Printf("验证UTXO: %s, %s\n", outpoint, utxoData)
 
 	// 从mempoolUsedFtIncomeStore获取使用该UTXO的交易
 	usedData, err := m.mempoolManager.mempoolUsedFtIncomeStore.Get(txId)
@@ -316,6 +325,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 
 		// 检查codeHash、genesis和sensibleId是否匹配
 		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == sensibleId {
+			fmt.Printf("匹配intputs和output成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
@@ -323,6 +333,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == tokenCodeHash && usedParts[2] == tokenHash && usedParts[3] == sensibleId {
+			fmt.Printf("匹配intputs和token成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
@@ -330,6 +341,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == genesisCodeHash && usedParts[2] == genesisHash && usedParts[3] == sensibleId {
+			fmt.Printf("匹配intputs和genesis成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
@@ -337,6 +349,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[5] == genesisTxId {
+			fmt.Printf("匹配intputs和genesisTxId成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err

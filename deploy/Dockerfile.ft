@@ -1,11 +1,11 @@
 # 使用多阶段构建
-FROM golang:1.22-alpine AS builder
+FROM golang:1.22 AS builder
 
 # 设置工作目录
 WORKDIR /app
 
 # 安装必要的构建工具
-RUN apk add --no-cache git gcc musl-dev
+RUN apt-get update && apt-get install -y git gcc
 
 # 复制go.mod和go.sum
 COPY go.mod go.sum ./
@@ -24,11 +24,16 @@ RUN if [ ! -f "config_mvc_ft_pro.yaml" ]; then \
 # 构建应用
 RUN CGO_ENABLED=1 GOOS=linux go build -o ft-utxo-indexer apps/ft-main/main.go
 
-# 使用轻量级的alpine作为运行环境
-FROM alpine:latest
+# 使用Ubuntu作为运行环境
+FROM ubuntu:22.04
 
 # 安装运行时依赖
-RUN apk add --no-cache ca-certificates tzdata
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tzdata \
+    libzmq3-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 # 设置时区
 ENV TZ=Asia/Shanghai
