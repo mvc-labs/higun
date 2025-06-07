@@ -3,6 +3,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -71,6 +72,7 @@ type UniqueFtUtxo struct {
 }
 
 func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (balanceResults []*FtBalance, err error) {
+	balanceResults = make([]*FtBalance, 0)
 	addrKey := []byte(address)
 	spendMap := make(map[string]struct{})
 	defer func() {
@@ -123,8 +125,12 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 
 	// 按codeHash和genesis分类统计
 	balanceMap := make(map[string]*FtBalance)
-	parts := strings.Split(string(data), ",")
+	// 用于去重的map
+	uniqueUtxoMap := make(map[string]struct{})
+	// 用于排序的map
+	genesisUtxoMap := make(map[string][]string)
 
+	parts := strings.Split(string(data), ",")
 	for _, part := range parts {
 		if part == "" {
 			continue
@@ -141,10 +147,6 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		currAmount := incomes[2]
 		currTxID := incomes[3]
 		currIndex := incomes[4]
-		currValue := incomes[5]
-		currHeight := incomes[6]
-		_ = currValue
-		_ = currHeight
 
 		// 如果指定了codeHash和genesis，则只处理匹配的
 		if codeHash != "" && codeHash != currCodeHash {
@@ -159,6 +161,12 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		if _, exists := spendMap[key]; exists {
 			continue
 		}
+
+		// 检查是否重复
+		if _, exists := uniqueUtxoMap[key]; exists {
+			continue
+		}
+		uniqueUtxoMap[key] = struct{}{}
 
 		// 获取或创建余额记录
 		balanceKey := currCodeHash + "@" + currGenesis
@@ -189,6 +197,9 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		balance.Confirmed += amount
 		balance.ConfirmedString = strconv.FormatInt(balance.Confirmed, 10)
 		balance.UTXOCount++
+
+		// 添加到排序map
+		genesisUtxoMap[balanceKey] = append(genesisUtxoMap[balanceKey], key)
 	}
 
 	// 处理内存池中的收入UTXO
@@ -206,6 +217,12 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		if _, exists := spendMap[key]; exists {
 			continue
 		}
+
+		// 检查是否重复
+		if _, exists := uniqueUtxoMap[key]; exists {
+			continue
+		}
+		uniqueUtxoMap[key] = struct{}{}
 
 		// 获取或创建余额记录
 		balanceKey := utxo.CodeHash + "@" + utxo.Genesis
@@ -236,6 +253,9 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		balance.UnconfirmedIncome += amount
 		balance.UnconfirmedIncomeString = strconv.FormatInt(balance.UnconfirmedIncome, 10)
 		balance.UTXOCount++
+
+		// 添加到排序map
+		genesisUtxoMap[balanceKey] = append(genesisUtxoMap[balanceKey], key)
 	}
 
 	// 处理内存池中的已花费UTXO
@@ -278,8 +298,28 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		balance.UnconfirmedSpendString = strconv.FormatInt(balance.UnconfirmedSpend, 10)
 	}
 
+	// 对每个 balanceKey 的 outpoint 数组进行排序，并只保留第一个元素
+	for balanceKey, outpoints := range genesisUtxoMap {
+		if len(outpoints) > 0 {
+			sort.Strings(outpoints)
+			genesisUtxoMap[balanceKey] = []string{outpoints[0]}
+		}
+	}
+
+	// 获取所有 balanceKey 并排序
+	balanceKeys := make([]string, 0, len(genesisUtxoMap))
+	for balanceKey := range genesisUtxoMap {
+		balanceKeys = append(balanceKeys, balanceKey)
+	}
+
+	// 根据每个 balanceKey 对应的第一个 outpoint 进行排序
+	sort.Slice(balanceKeys, func(i, j int) bool {
+		return genesisUtxoMap[balanceKeys[i]][0] < genesisUtxoMap[balanceKeys[j]][0]
+	})
+
 	// 计算最终余额并转换map为slice
-	for _, balance := range balanceMap {
+	for _, balanceKey := range balanceKeys {
+		balance := balanceMap[balanceKey]
 		// 计算总余额：已确认 + 未确认收入 - 未确认支出
 		balance.Balance = balance.Confirmed + balance.UnconfirmedIncome - balance.UnconfirmedSpend
 		balance.BalanceString = strconv.FormatInt(balance.Balance, 10)
@@ -340,6 +380,9 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 		return nil, err
 	}
 
+	// 用于去重的map
+	uniqueUtxoMap := make(map[string]*FtUTXO)
+
 	parts := strings.Split(string(data), ",")
 	for _, part := range parts {
 		if part == "" {
@@ -371,6 +414,11 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 		// 检查是否已花费
 		key := currTxID + ":" + currIndex
 		if _, exists := spendMap[key]; exists {
+			continue
+		}
+
+		// 检查是否重复
+		if _, exists := uniqueUtxoMap[key]; exists {
 			continue
 		}
 
@@ -410,7 +458,7 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			Decimal:       ftInfo.Decimal,
 			Address:       address,
 			Height:        height, // 已确认的UTXO
-			Flag:          fmt.Sprintf("%s_%d", currTxID, currIndex),
+			Flag:          fmt.Sprintf("%s_%s", currTxID, currIndex),
 		})
 	}
 
@@ -427,6 +475,11 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 		// 检查是否已花费
 		key := utxo.TxID + ":" + utxo.Index
 		if _, exists := spendMap[key]; exists {
+			continue
+		}
+
+		// 检查是否重复
+		if _, exists := uniqueUtxoMap[key]; exists {
 			continue
 		}
 
@@ -461,7 +514,7 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			Decimal:       ftInfo.Decimal,
 			Address:       address,
 			Height:        -1, // 内存池中的UTXO
-			Flag:          fmt.Sprintf("%s_%d", utxo.TxID, utxo.Index),
+			Flag:          fmt.Sprintf("%s_%s", utxo.TxID, utxo.Index),
 		})
 	}
 
@@ -554,7 +607,7 @@ func (i *ContractFtIndexer) GetFtInfo(key string) (*FtInfo, error) {
 		return nil, fmt.Errorf("获取FT信息失败: %w", err)
 	}
 
-	fmt.Println("data", string(data))
+	// fmt.Println("data", string(data))
 	// 解析FT信息
 	parts := strings.Split(string(data), "@")
 	if len(parts) < 4 {

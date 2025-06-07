@@ -790,6 +790,7 @@ func (s *PebbleStore) QueryFtUTXOAddresses(outpoints *[]string, concurrency int,
 	return finalFtResults, finalUniqueResults, finalErr
 }
 
+// FtAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value@height@contractType
 func getFtAddressByStr(key, results string) (string, error) {
 	info := strings.Split(key, ":")
 	if len(info) != 2 {

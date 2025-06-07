@@ -172,8 +172,30 @@ func (m *FtVerifyManager) verifyWorker(utxoChan <-chan struct {
 
 // verifyUtxo 验证单个UTXO
 func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
+	// 解析UTXO数据h
+	//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
+	utxoParts := strings.Split(utxoData, "@")
+	if len(utxoParts) < 9 {
+		return fmt.Errorf("无效的UTXO数据格式: %s", utxoData)
+	}
+	heightStr := utxoParts[8]
+	height, err := strconv.Atoi(heightStr)
+	if err != nil {
+		return fmt.Errorf("无效块高：%s", heightStr)
+	}
+
+	lastHeight, err := m.indexer.GetLastIndexedHeight()
+	if err != nil {
+		return fmt.Errorf("获取上次索引高度失败: %w", err)
+	}
+	if height > lastHeight {
+		return nil
+	}
+
 	// 解析outpoint获取txId
 	txId := strings.Split(outpoint, ":")[0]
+
+	fmt.Printf("验证UTXO: %s, %s\n", outpoint, utxoData)
 
 	// 从usedFtIncomeStore获取使用该UTXO的交易
 	usedData, err := m.indexer.usedFtIncomeStore.Get([]byte(txId))
@@ -188,13 +210,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		}
 		return errors.New("获取使用记录失败: " + err.Error())
 	}
-
-	// 解析UTXO数据
-	//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
-	utxoParts := strings.Split(utxoData, "@")
-	if len(utxoParts) < 9 {
-		return fmt.Errorf("无效的UTXO数据格式: %s", utxoData)
-	}
+	fmt.Printf("找到[%s]的usedData: %s\n", txId, string(usedData))
 
 	// 获取UTXO的关键信息
 	ftAddress := utxoParts[0]
@@ -211,6 +227,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		}
 		return m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
 	}
+	fmt.Printf("sensibleId: %s\n", sensibleId)
 
 	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(sensibleId)
 	if err != nil {
@@ -228,6 +245,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("找到[%s]的genesisUtxo: %s\n", usedGenesisOutpoint, string(genesisUtxo))
 	if len(genesisUtxo) > 0 {
 		//如果有，就从contractFtGenesisOutputStore里面获取
 		// key:usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
@@ -235,6 +253,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		if err != nil {
 			return errors.New(fmt.Sprintf("获取初始创世UTXO失败[%s][%s]: %s", outpoint, usedGenesisOutpoint, err.Error()))
 		}
+		fmt.Printf("找到[%s]的genesisOutputs: %s\n", usedGenesisOutpoint, string(genesisOutputs))
 		if len(genesisOutputs) > 0 {
 			genesisOutputParts := strings.Split(string(genesisOutputs), ",")
 			for _, genesisOutput := range genesisOutputParts {
@@ -311,6 +330,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 
 		// 检查codeHash、genesis和sensibleId是否匹配
 		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == sensibleId {
+			fmt.Printf("匹配intputs和output成功: %s, %s, %s\n", usedParts[1], usedParts[2], usedParts[3])
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
@@ -318,6 +338,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == tokenCodeHash && usedParts[2] == tokenHash && usedParts[3] == sensibleId {
+			fmt.Printf("匹配intputs和token成功: %s, %s, %s\n", usedParts[1], usedParts[2], usedParts[3])
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
@@ -325,6 +346,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == genesisCodeHash && usedParts[2] == genesisHash && usedParts[3] == sensibleId {
+			fmt.Printf("匹配intputs和genesis成功: %s, %s, %s\n", usedParts[1], usedParts[2], usedParts[3])
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
@@ -332,6 +354,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[5] == genesisTxId {
+			fmt.Printf("匹配intputs和genesisTxId成功: %s, %s, %s\n", usedParts[1], usedParts[2], usedParts[3])
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
