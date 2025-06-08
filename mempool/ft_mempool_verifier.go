@@ -114,7 +114,7 @@ func (m *FtMempoolVerifier) verifyMempoolFtUtxos() error {
 		}
 	}
 
-	log.Printf("验证内存池FT-UTXO，uncheckData数量: %d", len(uncheckData))
+	// log.Printf("验证内存池FT-UTXO，uncheckData数量: %d", len(uncheckData))
 	if len(uncheckData) == 0 {
 		return nil
 	}
@@ -173,21 +173,21 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 	// 解析outpoint获取txId
 	txId := strings.Split(outpoint, ":")[0]
 
-	_, err := m.mempoolManager.mempoolVerifyTxStore.Get(txId + "_")
+	_, err := m.mempoolManager.mempoolVerifyTxStore.GetSimpleRecord(txId)
 	if err != nil {
-		if err == storage.ErrNotFound {
+		if strings.Contains(err.Error(), storage.ErrNotFound.Error()) {
 			return nil
 		}
-		return err
+		return errors.New("获取VerifyTx失败[" + txId + "][" + outpoint + "]: " + err.Error())
 	}
-	fmt.Printf("验证UTXO: %s, %s\n", outpoint, utxoData)
+	fmt.Printf("[MEMPOOL]验证内存池UTXO: %s, %s\n", outpoint, utxoData)
 
 	// 从mempoolUsedFtIncomeStore获取使用该UTXO的交易
-	usedData, err := m.mempoolManager.mempoolUsedFtIncomeStore.Get(txId)
+	usedData, err := m.mempoolManager.mempoolUsedFtIncomeStore.GetSimpleRecord(txId)
 	if err != nil {
-		if err == storage.ErrNotFound {
+		if strings.Contains(err.Error(), storage.ErrNotFound.Error()) {
 			// 如果找不到使用记录，说明UTXO未被使用，可以删除
-			return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteRecord(outpoint, "")
+			return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteSimpleRecord(outpoint)
 		}
 		return err
 	}
@@ -209,7 +209,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 		if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 			return errors.New("添加有效UTXO数据失败: " + err.Error())
 		}
-		return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteRecord(outpoint, "")
+		return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteSimpleRecord(outpoint)
 	}
 
 	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(sensibleId)
@@ -230,7 +230,8 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 	// }
 	//如果genesisUtxo没有数据，则从mempoolContractFtUtxoStore获取
 	if len(genesisUtxo) == 0 {
-		genesisUtxo, err = m.mempoolManager.mempoolContractFtGenesisStore.GetFtGenesisByKey(usedOutpoint)
+		// genesisUtxo, err = m.mempoolManager.mempoolContractFtGenesisStore.GetFtGenesisByKey(usedOutpoint)
+		genesisUtxo, err = m.mempoolManager.mempoolContractFtGenesisStore.GetSimpleRecord(usedOutpoint)
 		if err != nil {
 			return err
 		}
@@ -244,7 +245,9 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 			return err
 		}
 		if len(genesisOutputs) == 0 {
-			genesisOutputs, err = m.mempoolManager.mempoolContractFtGenesisOutputStore.GetFtGenesisOutputsByKey(usedOutpoint)
+			// genesisOutputs, err = m.mempoolManager.mempoolContractFtGenesisOutputStore.GetFtGenesisOutputsByKey(usedOutpoint)
+			genesisOutputs, err = m.mempoolManager.mempoolContractFtGenesisOutputStore.GetSimpleRecord(usedOutpoint)
+
 			if err != nil {
 				return err
 			}
@@ -325,7 +328,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 
 		// 检查codeHash、genesis和sensibleId是否匹配
 		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == sensibleId {
-			fmt.Printf("匹配intputs和output成功: %s, %s\n", outpoint, utxoData)
+			fmt.Printf("[MEMPOOL]匹配intputs和output成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
@@ -333,7 +336,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == tokenCodeHash && usedParts[2] == tokenHash && usedParts[3] == sensibleId {
-			fmt.Printf("匹配intputs和token成功: %s, %s\n", outpoint, utxoData)
+			fmt.Printf("[MEMPOOL]匹配intputs和token成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
@@ -341,7 +344,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == genesisCodeHash && usedParts[2] == genesisHash && usedParts[3] == sensibleId {
-			fmt.Printf("匹配intputs和genesis成功: %s, %s\n", outpoint, utxoData)
+			fmt.Printf("[MEMPOOL]匹配intputs和genesis成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
@@ -349,7 +352,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[5] == genesisTxId {
-			fmt.Printf("匹配intputs和genesisTxId成功: %s, %s\n", outpoint, utxoData)
+			fmt.Printf("[MEMPOOL]匹配intputs和genesisTxId成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 				return err
@@ -359,7 +362,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 	}
 
 	// 删除已验证的UTXO
-	return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteRecord(outpoint, "")
+	return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteSimpleRecord(outpoint)
 }
 
 // addToValidStore 添加UTXO到有效存储

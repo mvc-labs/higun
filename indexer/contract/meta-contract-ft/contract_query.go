@@ -32,14 +32,14 @@ type FtBalance struct {
 }
 
 type FtUTXO struct {
-	CodeHash      string `json:"code_hash"`
+	CodeHash      string `json:"codeHash"`
 	Genesis       string `json:"genesis"`
 	Name          string `json:"name"`
 	Symbol        string `json:"symbol"`
-	SensibleId    string `json:"sensible_id"`
+	SensibleId    string `json:"sensibleId"`
 	Decimal       uint8  `json:"decimal"`
 	Txid          string `json:"txid"`
-	TxIndex       string `json:"txIndex"`
+	TxIndex       int64  `json:"txIndex"`
 	ValueString   string `json:"valueString"`
 	SatoshiString string `json:"satoshiString"`
 	Value         int64  `json:"value"`
@@ -80,6 +80,18 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 			spendMap = nil
 		}
 	}()
+	mempoolSpendMap := make(map[string]struct{})
+	defer func() {
+		if mempoolSpendMap != nil {
+			mempoolSpendMap = nil
+		}
+	}()
+	blockIncomeMap := make(map[string]struct{})
+	defer func() {
+		if blockIncomeMap != nil {
+			blockIncomeMap = nil
+		}
+	}()
 
 	// 获取已花费的FT UTXO
 	spendData, _, err := i.addressFtSpendStore.GetWithShard(addrKey)
@@ -110,7 +122,7 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 	// 处理内存池中的已花费UTXO
 	for _, utxo := range mempoolSpendList {
 		key := utxo.TxID + ":" + utxo.Index
-		spendMap[key] = struct{}{}
+		mempoolSpendMap[key] = struct{}{}
 	}
 
 	// 获取FT收入数据
@@ -214,7 +226,7 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 
 		// 检查是否已花费
 		key := utxo.TxID + ":" + utxo.Index
-		if _, exists := spendMap[key]; exists {
+		if _, exists := mempoolSpendMap[key]; exists {
 			continue
 		}
 
@@ -443,9 +455,14 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 			continue
 		}
 
+		txIndex, err := strconv.ParseInt(currIndex, 10, 64)
+		if err != nil {
+			continue
+		}
+
 		utxos = append(utxos, &FtUTXO{
 			Txid:          currTxID,
-			TxIndex:       currIndex,
+			TxIndex:       txIndex,
 			Value:         amount,
 			ValueString:   currAmount,
 			Satoshi:       value,
@@ -498,10 +515,14 @@ func (i *ContractFtIndexer) GetFtUTXOs(address, codeHash, genesis string) (utxos
 		if err != nil {
 			continue
 		}
+		txIndex, err := strconv.ParseInt(utxo.Index, 10, 64)
+		if err != nil {
+			continue
+		}
 
 		utxos = append(utxos, &FtUTXO{
 			Txid:          utxo.TxID,
-			TxIndex:       utxo.Index,
+			TxIndex:       txIndex,
 			Value:         amount,
 			ValueString:   utxo.Amount,
 			Satoshi:       value,

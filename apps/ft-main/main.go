@@ -199,7 +199,7 @@ func main() {
 		idx.SetMempoolManager(mempoolMgr)
 	}
 	// 创建并启动FT验证管理器
-	mempoolVerifyManager := mempool.NewFtMempoolVerifier(mempoolMgr, 5*time.Second, 1000, params.WorkerCount)
+	mempoolVerifyManager := mempool.NewFtMempoolVerifier(mempoolMgr, 2*time.Second, 1000, params.WorkerCount)
 	if err := mempoolVerifyManager.Start(); err != nil {
 		log.Printf("启动内存池FT验证管理器失败: %v", err)
 	} else {

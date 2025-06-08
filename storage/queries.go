@@ -326,6 +326,48 @@ func (s *SimpleDB) AddRecord(utxoID string, address string, value []byte) error 
 	return nil
 }
 
+// SetWithIndex
+func (s *SimpleDB) AddSimpleRecord(key string, value []byte) error {
+	// 创建批处理
+	batch := s.db.NewBatch()
+	defer batch.Close()
+
+	// 1. 主键
+	mainKey := []byte(key)
+	// 在批处理中添加增加操作
+	if err := batch.Set(mainKey, value, pebble.NoSync); err != nil {
+		return fmt.Errorf("批处理增加键1失败: %w", err)
+	}
+
+	// 提交批处理
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return fmt.Errorf("提交批处理失败: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SimpleDB) GetSimpleRecord(key string) ([]byte, error) {
+	value, _, err := s.db.Get([]byte(key))
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func (s *SimpleDB) DeleteSimpleRecord(key string) error {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+
+	if err := batch.Delete([]byte(key), pebble.NoSync); err != nil {
+		return fmt.Errorf("批处理删除键失败: %w", err)
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return fmt.Errorf("提交批处理失败: %w", err)
+	}
+	return nil
+}
+
 // DeleteWithIndex 删除Spend记录
 func (s *SimpleDB) DeleteRecord(utxoID string, address string) error {
 	// 创建批处理
@@ -358,6 +400,28 @@ func (s *SimpleDB) DeleteSpendRecord(utxoID string) error {
 	}
 	for _, utxo := range utxoList {
 		s.DeleteRecord(utxo.TxID, utxo.Address)
+	}
+	return nil
+}
+
+func (s *SimpleDB) DeleteFtSpendRecord(utxoID string) error {
+	utxoList, err := s.GetUtxoByKey(utxoID)
+	if err != nil {
+		return fmt.Errorf("查询失败: %w", err)
+	}
+	for _, utxo := range utxoList {
+		s.DeleteRecord(utxoID, utxo.Address)
+	}
+	return nil
+}
+
+func (s *SimpleDB) DeleteUniqueSpendRecord(utxoID string) error {
+	utxoList, err := s.GetUtxoByKey(utxoID)
+	if err != nil {
+		return fmt.Errorf("查询失败: %w", err)
+	}
+	for _, utxo := range utxoList {
+		s.DeleteRecord(utxoID, utxo.Address)
 	}
 	return nil
 }
@@ -418,28 +482,25 @@ func (s *SimpleDB) GetFtUtxo() (ftUtxoList []common.FtUtxo, err error) {
 	for iter.First(); iter.Valid(); iter.Next() {
 		utxo := common.FtUtxo{}
 		// 提取地址部分(在_之后的部分)
-		keyParts := strings.Split(string(iter.Key()), "_")
+		keyParts := strings.Split(string(iter.Key()), ":")
 		if len(keyParts) == 2 {
-			utxo.Address = keyParts[0]
-			utxo.UtxoId = keyParts[1]
-
-			utxoIdStrs := strings.Split(utxo.UtxoId, ":")
-			if len(utxoIdStrs) == 2 {
-				utxo.TxID = utxoIdStrs[0]
-				utxo.Index = utxoIdStrs[1]
-			}
+			utxo.TxID = keyParts[0]
+			utxo.Index = keyParts[1]
+			utxo.UtxoId = string(iter.Key())
 		}
 
 		// 获取键对应的值
+		//ftAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value
 		valueData := string(iter.Value())
 		valueParts := strings.Split(valueData, "@")
-		if len(valueParts) == 6 {
-			utxo.CodeHash = valueParts[0]
-			utxo.Genesis = valueParts[1]
-			utxo.SensibleId = valueParts[2]
-			utxo.Amount = valueParts[3]
-			utxo.Index = valueParts[4]
-			utxo.Value = valueParts[5]
+		if len(valueParts) == 7 {
+			utxo.Address = valueParts[0]
+			utxo.CodeHash = valueParts[1]
+			utxo.Genesis = valueParts[2]
+			utxo.SensibleId = valueParts[3]
+			utxo.Amount = valueParts[4]
+			utxo.Index = valueParts[5]
+			utxo.Value = valueParts[6]
 		}
 		ftUtxoList = append(ftUtxoList, utxo)
 	}

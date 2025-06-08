@@ -116,7 +116,7 @@ func (m *FtVerifyManager) verifyFtUtxos() error {
 	}
 
 	//打印日志，uncheckData数量
-	log.Printf("验证FT-UTXO，uncheckData数量: %d", len(uncheckData))
+	// log.Printf("验证FT-UTXO，uncheckData数量: %d", len(uncheckData))
 	if len(uncheckData) == 0 {
 		return nil
 	}
@@ -195,7 +195,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	// 解析outpoint获取txId
 	txId := strings.Split(outpoint, ":")[0]
 
-	fmt.Printf("验证UTXO: %s, %s\n", outpoint, utxoData)
+	fmt.Printf("[BLOCK]验证UTXO: %s, %s\n", outpoint, utxoData)
 
 	// 从usedFtIncomeStore获取使用该UTXO的交易
 	usedData, err := m.indexer.usedFtIncomeStore.Get([]byte(txId))
@@ -330,7 +330,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 
 		// 检查codeHash、genesis和sensibleId是否匹配
 		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == sensibleId {
-			fmt.Printf("匹配intputs和output成功: %s, %s, %s\n", usedParts[1], usedParts[2], usedParts[3])
+			fmt.Printf("[BLOCK]匹配intputs和output成功: %s\n", outpoint)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
@@ -338,7 +338,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == tokenCodeHash && usedParts[2] == tokenHash && usedParts[3] == sensibleId {
-			fmt.Printf("匹配intputs和token成功: %s, %s, %s\n", usedParts[1], usedParts[2], usedParts[3])
+			fmt.Printf("[BLOCK]匹配intputs和token成功: %s\n", outpoint)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
@@ -346,7 +346,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == genesisCodeHash && usedParts[2] == genesisHash && usedParts[3] == sensibleId {
-			fmt.Printf("匹配intputs和genesis成功: %s, %s, %s\n", usedParts[1], usedParts[2], usedParts[3])
+			fmt.Printf("[BLOCK]匹配intputs和genesis成功: %s\n", outpoint)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
@@ -354,7 +354,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[5] == genesisTxId {
-			fmt.Printf("匹配intputs和genesisTxId成功: %s, %s, %s\n", usedParts[1], usedParts[2], usedParts[3])
+			fmt.Printf("[BLOCK]匹配intputs和genesisTxId成功: %s\n", outpoint)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
@@ -370,22 +370,12 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 // addToValidStore 添加UTXO到有效存储
 // FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
 func (m *FtVerifyManager) addToValidStore(ftAddress, utxoData string) error {
-	// 获取现有的有效UTXO数据
-	//key: FtAddress, value: CodeHash@Genesis@Amount@TxID@Index@Value@height,...
-	existingData, err := m.indexer.addressFtIncomeValidStore.Get([]byte(ftAddress))
-	if err != nil && err != storage.ErrNotFound {
-		return errors.New("获取有效UTXO数据失败: " + err.Error())
-	}
-
 	// 从 utxoData 中提取 txId 和 index
 	//value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height
 	utxoParts := strings.Split(utxoData, "@")
 	if len(utxoParts) < 9 {
 		return fmt.Errorf("无效的UTXO数据格式: %s", utxoData)
 	}
-	txId := utxoParts[5]  // txId 在第6个位置
-	index := utxoParts[6] // index 在第7个位置
-	currentOutpoint := txId + ":" + index
 
 	//newValue: CodeHash@Genesis@Amount@TxID@Index@Value@height
 	newValue := common.ConcatBytesOptimized(
@@ -400,7 +390,19 @@ func (m *FtVerifyManager) addToValidStore(ftAddress, utxoData string) error {
 		},
 		"@",
 	)
+	outpoint := utxoParts[5] + ":" + utxoParts[6]
 
+	// 使用BulkMergeMapConcurrent方式合并数据
+	mergeMap := make(map[string][]string)
+	mergeMap[ftAddress] = []string{newValue}
+
+	err := m.indexer.addressFtIncomeValidStore.BulkMergeMapConcurrent(&mergeMap, 1)
+	if err != nil {
+		return errors.New("合并更新有效UTXO数据失败: " + err.Error())
+	}
+	fmt.Printf("[BLOCK]加入有效UTXO:%s %s\n", ftAddress, outpoint)
+
+	/* 原来的代码
 	var validUtxos []string
 	if err == nil {
 		validUtxos = strings.Split(string(existingData), ",")
@@ -433,5 +435,6 @@ func (m *FtVerifyManager) addToValidStore(ftAddress, utxoData string) error {
 	if err != nil {
 		return errors.New("更新有效UTXO数据失败: " + err.Error())
 	}
+	*/
 	return nil
 }

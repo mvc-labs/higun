@@ -145,6 +145,10 @@ func (s *FtServer) getFtMempoolUTXOs(c *gin.Context) {
 	// 转换 common.FtUtxo 到 ft.FtUTXO
 	incomeUTXOs := make([]*ft.FtUTXO, 0, len(income))
 	for _, utxo := range income {
+		txIndex, err := strconv.ParseInt(utxo.Index, 10, 64)
+		if err != nil {
+			continue
+		}
 		incomeUTXOs = append(incomeUTXOs, &ft.FtUTXO{
 			CodeHash:      utxo.CodeHash,
 			Genesis:       utxo.Genesis,
@@ -153,7 +157,7 @@ func (s *FtServer) getFtMempoolUTXOs(c *gin.Context) {
 			SensibleId:    utxo.SensibleId,
 			Decimal:       uint8(0), // 需要从其他地方获取
 			Txid:          utxo.TxID,
-			TxIndex:       utxo.Index,
+			TxIndex:       txIndex,
 			ValueString:   utxo.Amount,
 			SatoshiString: utxo.Value,
 			Value:         0, // 需要转换
@@ -166,6 +170,10 @@ func (s *FtServer) getFtMempoolUTXOs(c *gin.Context) {
 
 	spendUTXOs := make([]*ft.FtUTXO, 0, len(spend))
 	for _, utxo := range spend {
+		txIndex, err := strconv.ParseInt(utxo.Index, 10, 64)
+		if err != nil {
+			continue
+		}
 		spendUTXOs = append(spendUTXOs, &ft.FtUTXO{
 			CodeHash:      utxo.CodeHash,
 			Genesis:       utxo.Genesis,
@@ -174,7 +182,7 @@ func (s *FtServer) getFtMempoolUTXOs(c *gin.Context) {
 			SensibleId:    utxo.SensibleId,
 			Decimal:       uint8(0), // 需要从其他地方获取
 			Txid:          utxo.TxID,
-			TxIndex:       utxo.Index,
+			TxIndex:       txIndex,
 			ValueString:   utxo.Amount,
 			SatoshiString: utxo.Value,
 			Value:         0, // 需要转换

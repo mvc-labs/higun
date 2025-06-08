@@ -34,7 +34,7 @@ type FtMempoolManager struct {
 	mempoolContractFtGenesisUtxoStore   *storage.SimpleDB    // 内存池合约创世UTXO信息数据库
 
 	mempoolAddressFtIncomeValidStore *storage.SimpleDB // 内存池合约数据数据库 key: outpoint+address   value:CodeHash@Genesis@sensibleId@Amount@Index@Value
-	mempoolUncheckFtOutpointStore    *storage.SimpleDB // 内存池未检查FT输出点数据库 key: outpoint+address   value:CodeHash@Genesis@sensibleId@Amount@Index@Value
+	mempoolUncheckFtOutpointStore    *storage.SimpleDB // 内存池未检查FT输出点数据库 key: outpoint   value:ftAddress@codeHash@genesis@sensibleId@ftAmount@index@value
 	mempoolUsedFtIncomeStore         *storage.SimpleDB // 内存池已使用FT收入数据库 key: usedTxId, value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height,...
 
 	mempoolUniqueFtIncomeStore *storage.SimpleDB // 内存池唯一FT收入数据库  key: outpoint+ftCodehashGenesis, value: codeHash@genesis@sensibleId@customData@Index@Value
@@ -277,7 +277,12 @@ func (m *FtMempoolManager) HandleRawTransaction(topic string, data []byte) error
 	if err != nil {
 		return fmt.Errorf("解析交易失败: %w", err)
 	}
-	fmt.Printf("ZMQ收到交易: %s\n", tx.TxHash().String())
+	// fmt.Printf("ZMQ收到交易: %s\n", tx.TxHash().String())
+
+	txHash := tx.TxHash().String()
+	if config.GlobalConfig.RPC.Chain == "mvc" {
+		txHash, _ = blockchain.GetNewHash(tx)
+	}
 
 	// 2. 处理交易输出，创建新的FT UTXO
 	isFtTx, err := m.processFtOutputs(tx)
@@ -285,7 +290,7 @@ func (m *FtMempoolManager) HandleRawTransaction(topic string, data []byte) error
 		return fmt.Errorf("处理FT交易输出失败: %w", err)
 	}
 	if isFtTx {
-		fmt.Printf("ZMQ收到FT交易: %s\n", tx.TxHash().String())
+		fmt.Printf("ZMQ收到FT交易: %s\n", txHash)
 	}
 
 	// 3. 处理交易输入，标记花费的FT UTXO
@@ -294,10 +299,12 @@ func (m *FtMempoolManager) HandleRawTransaction(topic string, data []byte) error
 		return fmt.Errorf("处理FT交易输入失败: %w", err)
 	}
 
-	// 4. 处理VerifyTx
-	err = m.processVerifyTx(tx)
-	if err != nil {
-		return fmt.Errorf("处理VerifyTx失败: %w", err)
+	if isFtTx {
+		// 4. 处理VerifyTx
+		err = m.processVerifyTx(tx)
+		if err != nil {
+			return fmt.Errorf("处理VerifyTx失败: %w", err)
+		}
 	}
 
 	return nil
@@ -309,15 +316,22 @@ func (m *FtMempoolManager) processVerifyTx(tx *wire.MsgTx) error {
 		txHash, _ = blockchain.GetNewHash(tx)
 	}
 
-	verifyTxKey := common.ConcatBytesOptimized([]string{txHash}, ":")
+	// verifyTxKey := common.ConcatBytesOptimized([]string{txHash}, ":")
 
 	// 先检查主存储中是否存在
-	_, err := m.mempoolVerifyTxStore.Get(verifyTxKey)
-	if err == storage.ErrNotFound {
-		// 主存储中不存在，添加到内存池存储
-		err = m.mempoolVerifyTxStore.AddRecord(verifyTxKey, "", []byte(""))
-		if err != nil {
-			return fmt.Errorf("存储VerifyTx失败: %w", err)
+	fmt.Printf("processVerifyTx txHash: %s\n", txHash)
+	_, err := m.mempoolVerifyTxStore.GetSimpleRecord(txHash)
+	if err != nil {
+		if strings.Contains(err.Error(), storage.ErrNotFound.Error()) {
+			// 主存储中不存在，添加到内存池存储
+			err = m.mempoolVerifyTxStore.AddSimpleRecord(txHash, []byte(txHash))
+			if err != nil {
+				return fmt.Errorf("存储VerifyTx失败: %w", err)
+			} else {
+				fmt.Printf("存储VerifyTx成功: %s\n", txHash)
+			}
+		} else {
+			return fmt.Errorf("获取VerifyTx失败: %w", err)
 		}
 	}
 
@@ -364,9 +378,10 @@ func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) (bool, error) {
 			}
 
 			//处理uncheckFtOutpointStore
-			uncheckFtOutpointKey := common.ConcatBytesOptimized([]string{utxoID, ftAddress}, ":")
-			//codeHash@genesis@sensibleId@ftAmount@index@value
-			err = m.mempoolUncheckFtOutpointStore.AddRecord(uncheckFtOutpointKey, "", []byte(mempoolFtUtxo))
+			uncheckFtOutpointKey := utxoID
+			//ftAddress@codeHash@genesis@sensibleId@ftAmount@index@value
+			newMempoolFtUtxo := common.ConcatBytesOptimized([]string{ftAddress, mempoolFtUtxo}, "@")
+			err = m.mempoolUncheckFtOutpointStore.AddSimpleRecord(uncheckFtOutpointKey, []byte(newMempoolFtUtxo))
 			if err != nil {
 				log.Printf("[Mempool] 存储FT内存池未检查UTXO索引失败 %s -> %s: %v", utxoID, ftAddress, err)
 				continue
@@ -380,7 +395,7 @@ func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) (bool, error) {
 				// 主存储中不存在，添加到内存池存储
 				//key:codeHash@genesis, value: sensibleId@name@symbol@decimal
 				ftInfoValue := common.ConcatBytesOptimized([]string{ftInfo.SensibleId, ftInfo.Name, ftInfo.Symbol, strconv.FormatUint(uint64(ftInfo.Decimal), 10)}, "@")
-				err = m.mempoolContractFtInfoStore.AddRecord(ftInfoKey, "", []byte(ftInfoValue))
+				err = m.mempoolContractFtInfoStore.AddSimpleRecord(ftInfoKey, []byte(ftInfoValue))
 				if err != nil {
 					log.Printf("[Mempool] 存储FT内存池信息失败 %s: %v", ftInfoKey, err)
 				}
@@ -395,7 +410,7 @@ func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) (bool, error) {
 					// 主存储中不存在，添加到内存池存储
 					//key:outpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis
 					genesisValue := common.ConcatBytesOptimized([]string{ftInfo.SensibleId, ftInfo.Name, ftInfo.Symbol, strconv.FormatUint(uint64(ftInfo.Decimal), 10), ftInfo.CodeHash, ftInfo.Genesis}, "@")
-					err = m.mempoolContractFtGenesisStore.AddRecord(genesisKey, "", []byte(genesisValue))
+					err = m.mempoolContractFtGenesisStore.AddSimpleRecord(genesisKey, []byte(genesisValue))
 					if err != nil {
 						log.Printf("[Mempool] 存储FT内存池创世信息失败 %s: %v", genesisKey, err)
 					}
@@ -421,7 +436,7 @@ func (m *FtMempoolManager) processFtOutputs(tx *wire.MsgTx) (bool, error) {
 						outputIndex,
 						valueStr,
 					}, "@")
-					err = m.mempoolContractFtGenesisUtxoStore.AddRecord(genesisUtxoKey, "", []byte(genesisUtxoValue))
+					err = m.mempoolContractFtGenesisUtxoStore.AddSimpleRecord(genesisUtxoKey, []byte(genesisUtxoValue))
 					if err != nil {
 						log.Printf("[Mempool] 存储FT内存池创世UTXO失败 %s: %v", genesisUtxoKey, err)
 					}
@@ -589,7 +604,7 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 		}
 
 		// 检查内存池中是否存在
-		mempoolValue, err := m.mempoolContractFtGenesisUtxoStore.Get(txPoint)
+		mempoolValue, err := m.mempoolContractFtGenesisUtxoStore.GetSimpleRecord(txPoint)
 		if err == nil {
 			// 如果是创世UTXO，记录交易ID
 			//key:outpoint, value:sensibleId@name@symbol@decimal@codeHash@genesis@amount@index@value{@IsSpent}
@@ -656,7 +671,7 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 		for txPoint, value := range usedGenesisUtxoMap {
 			// 获取原始UTXO信息并添加@IsSpent标记
 			spentValue := value + "@1" // 添加@IsSpent标记
-			if err := m.mempoolContractFtGenesisUtxoStore.AddRecord(txPoint, "", []byte(spentValue)); err != nil {
+			if err := m.mempoolContractFtGenesisUtxoStore.AddSimpleRecord(txPoint, []byte(spentValue)); err != nil {
 				log.Printf("[Mempool] 更新FT内存池创世UTXO状态失败 %s: %v", txPoint, err)
 			}
 
@@ -666,7 +681,7 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 	if len(usedFtIncomeMap) > 0 {
 		for usedTxId, utxoList := range usedFtIncomeMap {
 			//value: ftAddress@CodeHash@Genesis@sensibleId@Amount@Index@Value@height@contractType
-			if err := m.mempoolUsedFtIncomeStore.AddRecord(usedTxId, "", []byte(strings.Join(utxoList, ","))); err != nil {
+			if err := m.mempoolUsedFtIncomeStore.AddSimpleRecord(usedTxId, []byte(strings.Join(utxoList, ","))); err != nil {
 				log.Printf("[Mempool] 存储FT内存池已使用UTXO失败 %s: %v", usedTxId, err)
 			}
 		}
@@ -738,7 +753,7 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 
 			if len(outputs) > 0 {
 				outputValue := strings.Join(outputs, ",")
-				if err := m.mempoolContractFtGenesisOutputStore.AddRecord(usedTxPoint, "", []byte(outputValue)); err != nil {
+				if err := m.mempoolContractFtGenesisOutputStore.AddSimpleRecord(usedTxPoint, []byte(outputValue)); err != nil {
 					log.Printf("[Mempool] 存储FT内存池创世输出失败 %s: %v", txId, err)
 				}
 			}
@@ -752,7 +767,7 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 func (m *FtMempoolManager) ProcessNewBlockTxs(incomeUtxoList []common.FtUtxo, spendOutpointList []string, txList []string) error {
 	// 删除VerifyTx
 	for _, tx := range txList {
-		err := m.mempoolVerifyTxStore.DeleteRecord(tx, "")
+		err := m.mempoolVerifyTxStore.DeleteSimpleRecord(tx)
 		if err != nil {
 			log.Printf("删除VerifyTx失败 %s: %v", tx, err)
 		}
@@ -782,17 +797,17 @@ func (m *FtMempoolManager) ProcessNewBlockTxs(incomeUtxoList []common.FtUtxo, sp
 
 				// 检查并删除初始创世信息存储中的记录
 				genesisKey := outpoint
-				_, err = m.mempoolContractFtGenesisStore.Get(genesisKey)
+				_, err = m.mempoolContractFtGenesisStore.GetSimpleRecord(genesisKey)
 				if err == nil {
-					if err := m.mempoolContractFtGenesisStore.DeleteRecord(genesisKey, ""); err != nil {
+					if err := m.mempoolContractFtGenesisStore.DeleteSimpleRecord(genesisKey); err != nil {
 						log.Printf("删除FT内存池初始创世信息失败 %s: %v", genesisKey, err)
 					}
 				}
 
 				// 检查并删除新创世输出存储中的记录
-				_, err = m.mempoolContractFtGenesisUtxoStore.Get(genesisKey)
+				_, err = m.mempoolContractFtGenesisUtxoStore.GetSimpleRecord(genesisKey)
 				if err == nil {
-					if err := m.mempoolContractFtGenesisUtxoStore.DeleteRecord(genesisKey, ""); err != nil {
+					if err := m.mempoolContractFtGenesisUtxoStore.DeleteSimpleRecord(genesisKey); err != nil {
 						log.Printf("删除FT内存池new创世输出失败 %s: %v", genesisKey, err)
 					}
 				}
@@ -810,7 +825,7 @@ func (m *FtMempoolManager) ProcessNewBlockTxs(incomeUtxoList []common.FtUtxo, sp
 
 	for _, utxo := range incomeUtxoList {
 		codeHashGenesis := common.ConcatBytesOptimized([]string{utxo.CodeHash, utxo.Genesis}, "@")
-		err := m.mempoolContractFtInfoStore.DeleteRecord(codeHashGenesis, "")
+		err := m.mempoolContractFtInfoStore.DeleteSimpleRecord(codeHashGenesis)
 		if err != nil {
 			log.Printf("删除FT内存池创世信息失败 %s: %v", utxo.CodeHash+"@"+utxo.Genesis, err)
 		}
@@ -818,11 +833,11 @@ func (m *FtMempoolManager) ProcessNewBlockTxs(incomeUtxoList []common.FtUtxo, sp
 
 	// 删除spend
 	for _, outpoint := range spendOutpointList {
-		err := m.mempoolAddressFtSpendDB.DeleteSpendRecord(outpoint)
+		err := m.mempoolAddressFtSpendDB.DeleteFtSpendRecord(outpoint)
 		if err != nil {
 			log.Printf("删除FT内存池ft支出记录失败 %s: %v", outpoint, err)
 		}
-		err = m.mempoolUniqueFtSpendStore.DeleteRecord(outpoint, "")
+		err = m.mempoolUniqueFtSpendStore.DeleteUniqueSpendRecord(outpoint)
 		if err != nil {
 			log.Printf("删除FT内存池unique支出记录失败 %s: %v", outpoint, err)
 		}
@@ -985,11 +1000,14 @@ func (m *FtMempoolManager) InitializeMempool(bcClient interface{}) {
 					continue
 				}
 
-				// 处理VerifyTx
-				if err := m.processVerifyTx(msgTx); err != nil {
-					log.Printf("处理VerifyTx失败 %s: %v", txid, err)
-					continue
+				if isFtTx {
+					// 处理VerifyTx
+					if err := m.processVerifyTx(msgTx); err != nil {
+						log.Printf("处理VerifyTx失败 %s: %v", txid, err)
+						continue
+					}
 				}
+
 			}
 
 			// 批次处理完毕，暂停一小段时间让其他程序有机会执行

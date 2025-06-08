@@ -2,6 +2,7 @@ package mempool
 
 import (
 	"encoding/json"
+	"strings"
 
 	indexer "github.com/metaid/utxo_indexer/indexer/contract/meta-contract-ft"
 
@@ -29,7 +30,8 @@ func (m *FtMempoolManager) getRawFtUTXOsByAddress(address string, codeHash strin
 	spentMap := make(map[string]struct{})
 
 	// 1. 获取收入UTXO
-	incomeList, err := m.mempoolAddressFtIncomeDB.GetFtUtxoByKey(address)
+	// incomeList, err := m.mempoolAddressFtIncomeDB.GetFtUtxoByKey(address)
+	incomeList, err := m.mempoolAddressFtIncomeValidStore.GetFtUtxoByKey(address)
 	if err == nil {
 		for _, utxo := range incomeList {
 			if _, ok := incomeMap[utxo.TxID]; !ok {
@@ -53,7 +55,7 @@ func (m *FtMempoolManager) getRawFtUTXOsByAddress(address string, codeHash strin
 
 func (m *FtMempoolManager) getFtInfoByCodeHashGenesis(codeHash string, genesis string) (*common.FtInfoModel, error) {
 	codeHashGenesis := common.ConcatBytesOptimized([]string{codeHash, genesis}, "@")
-	valueInfo, err := m.mempoolContractFtInfoStore.Get(codeHashGenesis)
+	valueInfo, err := m.mempoolContractFtInfoStore.GetSimpleRecord(codeHashGenesis)
 	if err != nil {
 		return nil, err
 	}
@@ -69,14 +71,14 @@ func (m *FtMempoolManager) getFtInfoByCodeHashGenesis(codeHash string, genesis s
 func (m *FtMempoolManager) GetVerifyTx(txId string, page, pageSize int) ([]string, int, error) {
 	if txId != "" {
 		// 如果提供了 txId，只返回该交易的信息
-		value, err := m.mempoolVerifyTxStore.Get(txId + "_")
+		value, err := m.mempoolVerifyTxStore.GetSimpleRecord(txId)
 		if err != nil {
-			if err == storage.ErrNotFound {
+			if strings.Contains(err.Error(), storage.ErrNotFound.Error()) {
 				return []string{}, 0, nil
 			}
 			return nil, 0, err
 		}
-		return []string{value}, 1, nil
+		return []string{string(value)}, 1, nil
 	}
 
 	// 获取所有验证交易
