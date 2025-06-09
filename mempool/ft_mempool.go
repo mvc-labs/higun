@@ -34,9 +34,9 @@ func (m *FtMempoolManager) getRawFtUTXOsByAddress(address string, codeHash strin
 	incomeList, err := m.mempoolAddressFtIncomeValidStore.GetFtUtxoByKey(address)
 	if err == nil {
 		for _, utxo := range incomeList {
-			if _, ok := incomeMap[utxo.TxID]; !ok {
+			if _, ok := incomeMap[utxo.UtxoId]; !ok {
 				incomeUtxoList = append(incomeUtxoList, utxo)
-				incomeMap[utxo.TxID] = struct{}{}
+				incomeMap[utxo.UtxoId] = struct{}{}
 			}
 		}
 	}
@@ -44,9 +44,9 @@ func (m *FtMempoolManager) getRawFtUTXOsByAddress(address string, codeHash strin
 	spendList, err := m.mempoolAddressFtSpendDB.GetFtUtxoByKey(address)
 	if err == nil {
 		for _, utxo := range spendList {
-			if _, ok := spentMap[utxo.TxID]; !ok {
+			if _, ok := spentMap[utxo.UtxoId]; !ok {
 				spendUtxoList = append(spendUtxoList, utxo)
-				spentMap[utxo.TxID] = struct{}{}
+				spentMap[utxo.UtxoId] = struct{}{}
 			}
 		}
 	}
@@ -109,4 +109,88 @@ func (m *FtMempoolManager) GetVerifyTx(txId string, page, pageSize int) ([]strin
 // GetUncheckFtUtxo 获取未检查的FT UTXO列表
 func (m *FtMempoolManager) GetUncheckFtUtxo() ([]common.FtUtxo, error) {
 	return m.mempoolUncheckFtOutpointStore.GetFtUtxo()
+}
+
+// GetMempoolAddressFtSpendMap 获取内存池中地址的FT支出数据
+func (m *FtMempoolManager) GetMempoolAddressFtSpendMap(address string) (map[string]string, error) {
+	// 如果地址为空，获取所有数据
+	if address == "" {
+		// 获取所有地址的FT支出数据
+		allData, err := m.mempoolAddressFtSpendDB.GetAllKeyValues()
+		if err != nil {
+			return nil, err
+		}
+
+		// 将字符串数组转换为map
+		result := make(map[string]string)
+		for key, data := range allData {
+			result[key] = data
+		}
+		return result, nil
+	}
+
+	// 获取指定地址的FT支出数据
+	spendList, err := m.mempoolAddressFtSpendDB.GetFtUtxoByKey(address)
+	if err != nil {
+		return nil, err
+	}
+
+	// 将数据转换为map格式
+	result := make(map[string]string)
+	for _, utxo := range spendList {
+		key := utxo.TxID + ":" + utxo.Index
+		value := common.ConcatBytesOptimized([]string{
+			utxo.CodeHash,
+			utxo.Genesis,
+			utxo.SensibleId,
+			utxo.Amount,
+			utxo.Index,
+			utxo.Value,
+		}, "@")
+		result[key] = value
+	}
+
+	return result, nil
+}
+
+// GetMempoolUniqueFtSpendMap 获取内存池中唯一FT的支出数据
+func (m *FtMempoolManager) GetMempoolUniqueFtSpendMap(codeHashGenesis string) (map[string]string, error) {
+	// 如果codeHashGenesis为空，获取所有数据
+	if codeHashGenesis == "" {
+		// 获取所有唯一FT的支出数据
+		allData, err := m.mempoolUniqueFtSpendStore.GetAllKeyValues()
+		if err != nil {
+			return nil, err
+		}
+
+		// 将字符串数组转换为map
+		result := make(map[string]string)
+		for _, data := range allData {
+			result[data] = data
+		}
+		return result, nil
+	}
+
+	// 获取指定唯一FT的支出数据
+	spendList, err := m.mempoolUniqueFtSpendStore.GetFtUtxoByKey(codeHashGenesis)
+	if err != nil {
+		return nil, err
+	}
+
+	// 将数据转换为map格式
+	result := make(map[string]string)
+	for _, utxo := range spendList {
+		key := utxo.TxID + ":" + utxo.Index
+		value := common.ConcatBytesOptimized([]string{
+			utxo.CodeHash,
+			utxo.Genesis,
+			utxo.SensibleId,
+			utxo.CustomData,
+			utxo.Index,
+			utxo.Value,
+		}, "@")
+		result[key] = value
+	}
+
+	return result, nil
 }

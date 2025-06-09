@@ -105,8 +105,8 @@ func (s *SimpleDB) GetUtxoByKey(key string) (utxoList []common.Utxo, err error) 
 
 // GetByUTXO 通过UTXO ID查询相关联的地址
 // 例如: 对于键 "tx1:0_addr1", 通过 "tx1:0" 查询
-// value:CodeHash@Genesis@Amount@Value
-func (s *SimpleDB) GetByFtUTXO(utxoID string) (address string, codeHash string, genesis string, sensibleId string, amount string, value string, err error) {
+// value:CodeHash@Genesis@sensibleId@Amount@Index@Value
+func (s *SimpleDB) GetByFtUTXO(utxoID string) (address string, codeHash string, genesis string, sensibleId string, amount string, value string, index string, err error) {
 	// 使用前缀查询找到所有匹配的键
 	prefix := []byte(utxoID + "_")
 	// 创建迭代器
@@ -131,14 +131,16 @@ func (s *SimpleDB) GetByFtUTXO(utxoID string) (address string, codeHash string, 
 			address = keyParts[1]
 		}
 		// 获取键对应的值
+		//CodeHash@Genesis@sensibleId@Amount@Index@Value
 		valueData := string(iter.Value())
 		valueParts := strings.Split(valueData, "@")
-		if len(valueParts) == 5 {
+		if len(valueParts) == 6 {
 			codeHash = valueParts[0]
 			genesis = valueParts[1]
 			sensibleId = valueParts[2]
 			amount = valueParts[3]
-			value = valueParts[4]
+			index = valueParts[4]
+			value = valueParts[5]
 		}
 		break
 	}
@@ -148,7 +150,7 @@ func (s *SimpleDB) GetByFtUTXO(utxoID string) (address string, codeHash string, 
 // GetByUTXO 通过UTXO ID查询相关联的地址
 // 例如: 对于键 "tx1:0_addr1", 通过 "tx1:0" 查询
 // value:CodeHash@Genesis@sensibleId@customData@Index@Value
-func (s *SimpleDB) GetByUniqueFtUTXO(utxoID string) (codehashGenesis string, codeHash string, genesis string, sensibleId string, customData string, value string, err error) {
+func (s *SimpleDB) GetByUniqueFtUTXO(utxoID string) (codehashGenesis string, codeHash string, genesis string, sensibleId string, customData string, value string, index string, err error) {
 	// 使用前缀查询找到所有匹配的键
 	prefix := []byte(utxoID + "_")
 	// 创建迭代器
@@ -180,9 +182,8 @@ func (s *SimpleDB) GetByUniqueFtUTXO(utxoID string) (codehashGenesis string, cod
 			genesis = valueParts[1]
 			sensibleId = valueParts[2]
 			customData = valueParts[3]
-			index := valueParts[4]
+			index = valueParts[4]
 			value = valueParts[5]
-			_ = index
 		}
 		break
 	}
@@ -216,6 +217,54 @@ func (s *SimpleDB) GetFtUtxoByKey(key string) (ftUtxoList []common.FtUtxo, err e
 		if len(keyParts) == 2 {
 			utxo.Address = keyParts[0]
 			utxo.UtxoId = keyParts[1]
+
+			utxoIdStrs := strings.Split(utxo.UtxoId, ":")
+			if len(utxoIdStrs) == 2 {
+				utxo.TxID = utxoIdStrs[0]
+				utxo.Index = utxoIdStrs[1]
+			}
+
+		}
+		// 获取键对应的值
+		valueData := string(iter.Value())
+		valueParts := strings.Split(valueData, "@")
+		if len(valueParts) == 6 {
+			utxo.CodeHash = valueParts[0]
+			utxo.Genesis = valueParts[1]
+			utxo.SensibleId = valueParts[2]
+			utxo.Amount = valueParts[3]
+			utxo.Index = valueParts[4]
+			utxo.Value = valueParts[5]
+		}
+		ftUtxoList = append(ftUtxoList, utxo)
+	}
+	return
+}
+
+func (s *SimpleDB) GetFtUtxoByOutpoint(outpoint string) (ftUtxoList []common.FtUtxo, err error) {
+	// 使用前缀查询找到所有匹配的键
+	prefix := []byte(outpoint + "_")
+	// 创建迭代器
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+	})
+	if err != nil {
+		return
+	}
+	defer iter.Close()
+	// 遍历找到所有匹配的键
+	for iter.First(); iter.Valid(); iter.Next() {
+		// 检查键是否以前缀开头
+		key := iter.Key()
+		if !strings.HasPrefix(string(key), string(prefix)) {
+			break // 已经超出前缀范围
+		}
+		utxo := common.FtUtxo{}
+		// 提取地址部分(在_之后的部分)
+		keyParts := strings.Split(string(key), "_")
+		if len(keyParts) == 2 {
+			utxo.Address = keyParts[1]
+			utxo.UtxoId = keyParts[0]
 
 			utxoIdStrs := strings.Split(utxo.UtxoId, ":")
 			if len(utxoIdStrs) == 2 {
@@ -405,7 +454,7 @@ func (s *SimpleDB) DeleteSpendRecord(utxoID string) error {
 }
 
 func (s *SimpleDB) DeleteFtSpendRecord(utxoID string) error {
-	utxoList, err := s.GetUtxoByKey(utxoID)
+	utxoList, err := s.GetFtUtxoByOutpoint(utxoID)
 	if err != nil {
 		return fmt.Errorf("查询失败: %w", err)
 	}
@@ -416,7 +465,7 @@ func (s *SimpleDB) DeleteFtSpendRecord(utxoID string) error {
 }
 
 func (s *SimpleDB) DeleteUniqueSpendRecord(utxoID string) error {
-	utxoList, err := s.GetUtxoByKey(utxoID)
+	utxoList, err := s.GetFtUtxoByOutpoint(utxoID)
 	if err != nil {
 		return fmt.Errorf("查询失败: %w", err)
 	}
@@ -522,4 +571,20 @@ func (s *SimpleDB) GetAll() ([]string, error) {
 		values = append(values, string(iter.Value()))
 	}
 	return values, nil
+}
+
+func (s *SimpleDB) GetAllKeyValues() (map[string]string, error) {
+	// 创建迭代器
+	iter, err := s.db.NewIter(&pebble.IterOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	keyValues := make(map[string]string)
+	// 遍历所有记录
+	for iter.First(); iter.Valid(); iter.Next() {
+		keyValues[string(iter.Key())] = string(iter.Value())
+	}
+	return keyValues, nil
 }

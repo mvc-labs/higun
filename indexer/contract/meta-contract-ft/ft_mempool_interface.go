@@ -9,4 +9,16 @@ type FtMempoolManager interface {
 
 	// GetFtInfoByCodeHashGenesis 通过合约代码哈希和创世交易ID获取FT信息
 	GetFtInfoByCodeHashGenesis(codeHash string, genesis string) (*common.FtInfoModel, error)
+
+	// GetMempoolAddressFtSpendMap 获取内存池中地址的FT支出数据
+	GetMempoolAddressFtSpendMap(address string) (map[string]string, error)
+
+	// GetMempoolUniqueFtSpendMap 获取内存池中唯一FT的支出数据
+	GetMempoolUniqueFtSpendMap(codeHashGenesis string) (map[string]string, error)
+
+	// // StartMempoolZmq 启动内存池ZMQ
+	// StartMempoolZmq() error
+
+	// // InitializeMempool 初始化内存池
+	// InitializeMempool(bcClient interface{})
 }

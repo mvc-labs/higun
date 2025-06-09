@@ -85,6 +85,10 @@ func (s *FtServer) setupRoutes() {
 	// 添加新的内存池查询接口
 	s.router.GET("/db/ft/mempool/verify/tx", s.getMempoolVerifyTx)
 	s.router.GET("/db/ft/mempool/uncheck/utxo", s.getMempoolUncheckFtUtxo)
+	s.router.GET("/db/ft/mempool/spend", s.getMempoolAddressFtSpendMap)
+	s.router.GET("/db/ft/mempool/unique/spend", s.getMempoolUniqueFtSpendMap)
+	s.router.GET("/db/ft/mempool/address/income", s.getMempoolAddressFtIncomeMap)
+	s.router.GET("/db/ft/mempool/address/income/valid", s.getMempoolAddressFtIncomeValidMap)
 }
 
 // 启动内存池API
@@ -131,7 +135,7 @@ func (s *FtServer) startMempool(c *gin.Context) {
 	}()
 
 	// 获取当前索引高度作为清理起始高度
-	lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
+	lastIndexedHeightBytes, err := s.metaStore.Get([]byte(common.MetaStoreKeyLastFtIndexedHeight))
 	if err == nil {
 		// 将当前高度设置为清理起始高度，避免清理历史区块
 		log.Println("将内存池清理起始高度设置为当前索引高度:", string(lastIndexedHeightBytes))
@@ -162,7 +166,7 @@ func (s *FtServer) startMempool(c *gin.Context) {
 
 				// 2. 获取最新索引高度
 				lastIndexedHeight := 0
-				lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
+				lastIndexedHeightBytes, err := s.metaStore.Get([]byte(common.MetaStoreKeyLastFtIndexedHeight))
 				if err == nil {
 					lastIndexedHeight, _ = strconv.Atoi(string(lastIndexedHeightBytes))
 				}
@@ -274,7 +278,7 @@ func (s *FtServer) rebuildMempool(c *gin.Context) {
 	}
 
 	// 获取当前索引高度作为清理起始高度
-	lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
+	lastIndexedHeightBytes, err := s.metaStore.Get([]byte(common.MetaStoreKeyLastFtIndexedHeight))
 	if err == nil {
 		// 将当前高度设置为清理起始高度，避免清理历史区块
 		log.Println("将内存池清理起始高度设置为当前索引高度:", string(lastIndexedHeightBytes))

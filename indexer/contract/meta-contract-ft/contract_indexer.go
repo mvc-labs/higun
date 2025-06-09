@@ -38,11 +38,14 @@ type ContractFtIndexer struct {
 	uniqueFtIncomeStore *storage.PebbleStore // 存储unique合约UTXO数据 key:codeHash@genesis, value: TxID@Index@Value@sensibleId@customData@height,...
 	uniqueFtSpendStore  *storage.PebbleStore // 存储unique合约UTXO数据 key:codeHash@genesis, value: TxID@Index@usedTxId,...
 
-	metaStore  *storage.MetaStore // 存储元数据
-	mu         sync.RWMutex
-	bar        *progressbar.ProgressBar
-	params     config.IndexerParams
-	mempoolMgr FtMempoolManager
+	metaStore   *storage.MetaStore // 存储元数据
+	mu          sync.RWMutex
+	bar         *progressbar.ProgressBar
+	params      config.IndexerParams
+	mempoolMgr  FtMempoolManager
+	mempoolInit bool // 内存池是否已初始化
+
+	stopCh <-chan struct{}
 }
 
 var workers = 1
@@ -150,7 +153,7 @@ func (i *ContractFtIndexer) IndexBlock(block *ContractFtBlock, updateHeight bool
 
 	if !block.IsPartialBlock && updateHeight {
 		heightStr := strconv.Itoa(block.Height)
-		if err := i.metaStore.Set([]byte("last_indexed_height"), []byte(heightStr)); err != nil {
+		if err := i.metaStore.Set([]byte(common.MetaStoreKeyLastFtIndexedHeight), []byte(heightStr)); err != nil {
 			return err
 		}
 
@@ -540,7 +543,7 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 }
 
 func (i *ContractFtIndexer) GetLastIndexedHeight() (int, error) {
-	heightBytes, err := i.metaStore.Get([]byte("last_indexed_height"))
+	heightBytes, err := i.metaStore.Get([]byte(common.MetaStoreKeyLastFtIndexedHeight))
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			log.Println("No previous height found, starting from genesis")
@@ -628,3 +631,90 @@ func (i *ContractFtIndexer) GetContractFtGenesisUtxoStore() *storage.PebbleStore
 func (i *ContractFtIndexer) SetMempoolManager(mempoolMgr FtMempoolManager) {
 	i.mempoolMgr = mempoolMgr
 }
+
+// func (i *ContractFtIndexer) StartAll() error {
+// 	// 检查是否已经初始化
+// 	if i.mempoolInit {
+// 		log.Println("内存池已经启动")
+// 		return nil
+// 	}
+
+// 	// 启动内存池
+// 	log.Println("通过自动启动ZMQ和内存池监听...")
+// 	err := i.mempoolMgr.StartMempool()
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// 标记为已初始化
+// 	i.mempoolInit = true
+// 	log.Println("内存池管理器已通过API启动，监听新交易...")
+
+// 	// 初始化内存池数据（加载现有内存池交易）
+// 	go func() {
+// 		log.Println("开始初始化FT内存池数据...")
+// 		i.mempoolMgr.InitializeMempool(s.bcClient)
+// 		log.Println("FT内存池数据初始化完成")
+// 	}()
+
+// 	// 获取当前索引高度作为清理起始高度
+// 	lastIndexedHeightBytes, err := i.metaStore.Get([]byte(common.MetaStoreKeyLastFtIndexedHeight))
+// 	if err == nil {
+// 		// 将当前高度设置为清理起始高度，避免清理历史区块
+// 		log.Println("将内存池清理起始高度设置为当前索引高度:", string(lastIndexedHeightBytes))
+// 		err = i.metaStore.Set([]byte("last_mempool_clean_height"), lastIndexedHeightBytes)
+// 		if err != nil {
+// 			log.Printf("设置内存池清理起始高度失败: %v", err)
+// 		}
+// 	} else {
+// 		log.Printf("获取当前索引高度失败: %v", err)
+// 	}
+
+// 	// 启动内存池清理协程
+// 	go func() {
+// 		// 内存池清理间隔时间
+// 		cleanInterval := 10 * time.Second
+
+// 		for {
+// 			select {
+// 			case <-i.stopCh:
+// 				return
+// 			case <-time.After(cleanInterval):
+// 				// 1. 获取最后清理的高度
+// 				lastCleanHeight := 0
+// 				lastCleanHeightBytes, err := i.metaStore.Get([]byte("last_mempool_clean_height"))
+// 				if err == nil {
+// 					lastCleanHeight, _ = strconv.Atoi(string(lastCleanHeightBytes))
+// 				}
+
+// 				// 2. 获取最新索引高度
+// 				lastIndexedHeight := 0
+// 				lastIndexedHeightBytes, err := i.metaStore.Get([]byte(common.MetaStoreKeyLastFtIndexedHeight))
+// 				if err == nil {
+// 					lastIndexedHeight, _ = strconv.Atoi(string(lastIndexedHeightBytes))
+// 				}
+
+// 				// 3. 如果最新索引高度大于最后清理高度，执行清理
+// 				if lastIndexedHeight > lastCleanHeight {
+// 					log.Printf("执行内存池清理，从高度 %d 到 %d", lastCleanHeight+1, lastIndexedHeight)
+
+// 					// 对每个新块执行清理
+// 					for height := lastCleanHeight + 1; height <= lastIndexedHeight; height++ {
+// 						err := i.mempoolMgr.CleanByHeight(height, s.bcClient)
+// 						if err != nil {
+// 							log.Printf("清理高度 %d 失败: %v", height, err)
+// 						}
+// 					}
+
+// 					// 更新最后清理高度
+// 					err := i.metaStore.Set([]byte("last_mempool_clean_height"), []byte(strconv.Itoa(lastIndexedHeight)))
+// 					if err != nil {
+// 						log.Printf("更新最后清理高度失败: %v", err)
+// 					}
+// 				}
+// 			}
+// 		}
+// 	}()
+
+// 	return nil
+// }

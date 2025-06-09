@@ -954,3 +954,60 @@ func (s *FtServer) getUniqueFtUTXOs(c *gin.Context) {
 		Count: len(utxos),
 	}, time.Now().UnixMilli()-startTime))
 }
+
+func (s *FtServer) getMempoolAddressFtSpendMap(c *gin.Context) {
+	startTime := time.Now().UnixMilli()
+	address := c.Query("address")
+
+	spendMap, err := s.indexer.GetMempoolAddressFtSpendMap(address)
+	if err != nil {
+		c.JSONP(http.StatusInternalServerError, respond.RespErr(err, time.Now().UnixMilli()-startTime, http.StatusInternalServerError))
+		return
+	}
+
+	c.JSONP(http.StatusOK, respond.RespSuccess(respond.FtSpendMapResponse{
+		Address:  address,
+		SpendMap: spendMap,
+	}, time.Now().UnixMilli()-startTime))
+}
+
+func (s *FtServer) getMempoolUniqueFtSpendMap(c *gin.Context) {
+	startTime := time.Now().UnixMilli()
+	codeHashGenesis := c.Query("codeHashGenesis")
+
+	spendMap, err := s.indexer.GetMempoolUniqueFtSpendMap(codeHashGenesis)
+	if err != nil {
+		c.JSONP(http.StatusInternalServerError, respond.RespErr(err, time.Now().UnixMilli()-startTime, http.StatusInternalServerError))
+		return
+	}
+
+	c.JSONP(http.StatusOK, respond.RespSuccess(respond.FtUniqueSpendMapResponse{
+		CodeHashGenesis: codeHashGenesis,
+		SpendMap:        spendMap,
+	}, time.Now().UnixMilli()-startTime))
+}
+
+// getMempoolAddressFtIncomeMap 获取内存池中所有地址的FT收入数据
+func (s *FtServer) getMempoolAddressFtIncomeMap(c *gin.Context) {
+	startTime := time.Now().UnixMilli()
+
+	incomeMap := s.mempoolMgr.GetMempoolAddressFtIncomeMap()
+
+	c.JSONP(http.StatusOK, respond.RespSuccess(respond.FtAddressFtIncomeMapResponse{
+		Address:   "",
+		IncomeMap: incomeMap,
+	}, time.Now().UnixMilli()-startTime))
+}
+
+// getMempoolAddressFtIncomeValidMap 获取内存池中所有地址的有效FT收入数据
+func (s *FtServer) getMempoolAddressFtIncomeValidMap(c *gin.Context) {
+	startTime := time.Now().UnixMilli()
+
+	// 获取数据
+	incomeValidMap := s.mempoolMgr.GetMempoolAddressFtIncomeValidMap()
+
+	c.JSONP(http.StatusOK, respond.RespSuccess(respond.FtAddressFtIncomeValidMapResponse{
+		Address:        "",
+		IncomeValidMap: incomeValidMap,
+	}, time.Now().UnixMilli()-startTime))
+}

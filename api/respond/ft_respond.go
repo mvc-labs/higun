@@ -162,3 +162,27 @@ type FtUniqueUTXOsResponse struct {
 	UTXOs []*ft.UniqueFtUtxo `json:"utxos"`
 	Count int                `json:"count"`
 }
+
+// FtAddressFtIncomeMapResponse FT地址收入数据响应
+type FtAddressFtIncomeMapResponse struct {
+	Address   string            `json:"address"`
+	IncomeMap map[string]string `json:"incomeMap"`
+}
+
+// FtAddressFtIncomeValidMapResponse FT地址有效收入数据响应
+type FtAddressFtIncomeValidMapResponse struct {
+	Address        string            `json:"address"`
+	IncomeValidMap map[string]string `json:"incomeValidMap"`
+}
+
+// FtSpendMapResponse FT支出数据响应
+type FtSpendMapResponse struct {
+	Address  string            `json:"address"`
+	SpendMap map[string]string `json:"spendMap"`
+}
+
+// FtUniqueSpendMapResponse 唯一FT支出数据响应
+type FtUniqueSpendMapResponse struct {
+	CodeHashGenesis string            `json:"codeHashGenesis"`
+	SpendMap        map[string]string `json:"spendMap"`
+}

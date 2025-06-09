@@ -129,7 +129,7 @@ func main() {
 	defer metaStore.Close()
 
 	// 验证最后索引高度
-	lastHeight, err := metaStore.Get([]byte("last_ft_indexed_height"))
+	lastHeight, err := metaStore.Get([]byte(common.MetaStoreKeyLastFtIndexedHeight))
 	if err == nil {
 		log.Printf("从高度 %s 恢复FT索引", lastHeight)
 	} else if errors.Is(err, storage.ErrNotFound) {
@@ -234,9 +234,13 @@ func main() {
 
 	log.Println("开始FT区块同步...")
 
+	onStartMempoolSyncDone := func() {
+		log.Println("开始内存池同步")
+	}
+
 	// 使用goroutine启动区块同步
 	go func() {
-		if err := bcClient.SyncBlocks(idx, checkInterval, stopCh, nil); err != nil {
+		if err := bcClient.SyncBlocks(idx, checkInterval, stopCh, onStartMempoolSyncDone); err != nil {
 			log.Fatalf("同步FT区块失败: %v", err)
 		}
 	}()

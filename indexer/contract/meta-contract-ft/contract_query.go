@@ -13,22 +13,26 @@ import (
 )
 
 type FtBalance struct {
-	Confirmed               int64  `json:"confirmed"`
-	ConfirmedString         string `json:"confirmedString"`
-	UnconfirmedIncome       int64  `json:"unconfirmedIncome"`
-	UnconfirmedIncomeString string `json:"unconfirmedIncomeString"`
-	UnconfirmedSpend        int64  `json:"unconfirmedSpend"`
-	UnconfirmedSpendString  string `json:"unconfirmedSpendString"`
-	Balance                 int64  `json:"balance"`
-	BalanceString           string `json:"balanceString"`
-	UTXOCount               int64  `json:"utxoCount"`
-	CodeHash                string `json:"codeHash"`
-	Genesis                 string `json:"genesis"`
-	SensibleId              string `json:"sensibleId"`
-	Name                    string `json:"name"`
-	Symbol                  string `json:"symbol"`
-	Decimal                 uint8  `json:"decimal"`
-	FtAddress               string `json:"ftAddress"`
+	Confirmed                                   int64  `json:"confirmed"`
+	ConfirmedString                             string `json:"confirmedString"`
+	UnconfirmedIncome                           int64  `json:"unconfirmedIncome"`
+	UnconfirmedIncomeString                     string `json:"unconfirmedIncomeString"`
+	UnconfirmedSpend                            int64  `json:"unconfirmedSpend"`
+	UnconfirmedSpendString                      string `json:"unconfirmedSpendString"`
+	UnconfirmedSpendFromConfirmed               int64  `json:"unconfirmedSpendFromConfirmed"`
+	UnconfirmedSpendFromConfirmedString         string `json:"unconfirmedSpendFromConfirmedString"`
+	UnconfirmedSpendFromUnconfirmedIncome       int64  `json:"unconfirmedSpendFromUnconfirmedIncome"`
+	UnconfirmedSpendFromUnconfirmedIncomeString string `json:"unconfirmedSpendFromUnconfirmedIncomeString"`
+	Balance                                     int64  `json:"balance"`
+	BalanceString                               string `json:"balanceString"`
+	UTXOCount                                   int64  `json:"utxoCount"`
+	CodeHash                                    string `json:"codeHash"`
+	Genesis                                     string `json:"genesis"`
+	SensibleId                                  string `json:"sensibleId"`
+	Name                                        string `json:"name"`
+	Symbol                                      string `json:"symbol"`
+	Decimal                                     uint8  `json:"decimal"`
+	FtAddress                                   string `json:"ftAddress"`
 }
 
 type FtUTXO struct {
@@ -75,19 +79,17 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 	balanceResults = make([]*FtBalance, 0)
 	addrKey := []byte(address)
 	spendMap := make(map[string]struct{})
+	mempoolSpendMap := make(map[string]struct{})
+	blockIncomeMap := make(map[string]struct{})
+	confirmedIncomeOutpointList := make([]string, 0)
+	unconfirmedIncomeOutpointList := make([]string, 0)
 	defer func() {
 		if spendMap != nil {
 			spendMap = nil
 		}
-	}()
-	mempoolSpendMap := make(map[string]struct{})
-	defer func() {
 		if mempoolSpendMap != nil {
 			mempoolSpendMap = nil
 		}
-	}()
-	blockIncomeMap := make(map[string]struct{})
-	defer func() {
 		if blockIncomeMap != nil {
 			blockIncomeMap = nil
 		}
@@ -179,6 +181,7 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 			continue
 		}
 		uniqueUtxoMap[key] = struct{}{}
+		confirmedIncomeOutpointList = append(confirmedIncomeOutpointList, key)
 
 		// 获取或创建余额记录
 		balanceKey := currCodeHash + "@" + currGenesis
@@ -226,15 +229,16 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 
 		// 检查是否已花费
 		key := utxo.TxID + ":" + utxo.Index
-		if _, exists := mempoolSpendMap[key]; exists {
-			continue
-		}
+		// if _, exists := mempoolSpendMap[key]; exists {
+		// 	continue
+		// }
 
 		// 检查是否重复
 		if _, exists := uniqueUtxoMap[key]; exists {
 			continue
 		}
 		uniqueUtxoMap[key] = struct{}{}
+		unconfirmedIncomeOutpointList = append(unconfirmedIncomeOutpointList, key)
 
 		// 获取或创建余额记录
 		balanceKey := utxo.CodeHash + "@" + utxo.Genesis
@@ -280,6 +284,7 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 			continue
 		}
 
+		spendOutpoint := utxo.TxID + ":" + utxo.Index
 		// 获取或创建余额记录
 		balanceKey := utxo.CodeHash + "@" + utxo.Genesis
 		balance, exists := balanceMap[balanceKey]
@@ -308,6 +313,28 @@ func (i *ContractFtIndexer) GetFtBalance(address, codeHash, genesis string) (bal
 		}
 		balance.UnconfirmedSpend += amount
 		balance.UnconfirmedSpendString = strconv.FormatInt(balance.UnconfirmedSpend, 10)
+
+		// fmt.Println("spendOutpoint:", spendOutpoint)
+		// fmt.Println("confirmedIncomeOutpointList:", confirmedIncomeOutpointList)
+		// fmt.Println("unconfirmedIncomeOutpointList:", unconfirmedIncomeOutpointList)
+
+		for _, outpoint := range confirmedIncomeOutpointList {
+			if outpoint == spendOutpoint {
+				// fmt.Println("spendOutpoint from confirmed:", spendOutpoint)
+				balance.UnconfirmedSpendFromConfirmed += amount
+				balance.UnconfirmedSpendFromConfirmedString = strconv.FormatInt(balance.UnconfirmedSpendFromConfirmed, 10)
+				break
+			}
+		}
+
+		for _, outpoint := range unconfirmedIncomeOutpointList {
+			if outpoint == spendOutpoint {
+				// fmt.Println("spendOutpoint from unconfirmed income:", spendOutpoint)
+				balance.UnconfirmedSpendFromUnconfirmedIncome += amount
+				balance.UnconfirmedSpendFromUnconfirmedIncomeString = strconv.FormatInt(balance.UnconfirmedSpendFromUnconfirmedIncome, 10)
+				break
+			}
+		}
 	}
 
 	// 对每个 balanceKey 的 outpoint 数组进行排序，并只保留第一个元素
@@ -1055,4 +1082,20 @@ func (i *ContractFtIndexer) GetUniqueFtUTXOs(codeHash, genesis string) (utxos []
 	}
 
 	return utxos, nil
+}
+
+// GetMempoolAddressFtSpendMap 获取内存池中地址的FT支出数据
+func (i *ContractFtIndexer) GetMempoolAddressFtSpendMap(address string) (map[string]string, error) {
+	if i.mempoolMgr == nil {
+		return nil, fmt.Errorf("内存池管理器未设置")
+	}
+	return i.mempoolMgr.GetMempoolAddressFtSpendMap(address)
+}
+
+// GetMempoolUniqueFtSpendMap 获取内存池中唯一FT的支出数据
+func (i *ContractFtIndexer) GetMempoolUniqueFtSpendMap(codeHashGenesis string) (map[string]string, error) {
+	if i.mempoolMgr == nil {
+		return nil, fmt.Errorf("内存池管理器未设置")
+	}
+	return i.mempoolMgr.GetMempoolUniqueFtSpendMap(codeHashGenesis)
 }

@@ -552,9 +552,9 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 		} else if err == storage.ErrNotFound {
 			// 主UTXO存储中没找到，尝试从内存池收入数据库查找
 			//CodeHash@Genesis@Amount@Value
-			ftUtxoAddress, ftUtxoCodeHash, ftUtxoGenesis, ftUtxoSensibleId, ftUtxoAmount, ftUtxoValue, _ = m.mempoolAddressFtIncomeDB.GetByFtUTXO(spentUtxoID)
+			ftUtxoAddress, ftUtxoCodeHash, ftUtxoGenesis, ftUtxoSensibleId, ftUtxoAmount, ftUtxoValue, ftUtxoIndex, _ = m.mempoolAddressFtIncomeDB.GetByFtUTXO(spentUtxoID)
 			if ftUtxoCodeHash == "" {
-				ftUtxoCodehashGenesis, ftUtxoCodeHash, ftUtxoGenesis, ftUtxoSensibleId, ftUtxoCustomData, ftUtxoValue, _ = m.mempoolUniqueFtIncomeStore.GetByUniqueFtUTXO(spentUtxoID)
+				ftUtxoCodehashGenesis, ftUtxoCodeHash, ftUtxoGenesis, ftUtxoSensibleId, ftUtxoCustomData, ftUtxoValue, ftUtxoIndex, _ = m.mempoolUniqueFtIncomeStore.GetByUniqueFtUTXO(spentUtxoID)
 				if ftUtxoCodehashGenesis == "" {
 					continue
 				}
@@ -644,7 +644,7 @@ func (m *FtMempoolManager) processFtInputs(tx *wire.MsgTx) error {
 		}
 
 		//key:usedTxId   value:ftAddress@CodeHash@Genesis@sensibleId@Amount@txId@Index@Value@height,...
-		incomeList, err := m.mempoolAddressFtIncomeDB.GetFtUtxoByKey(txPoint)
+		incomeList, err := m.mempoolAddressFtIncomeDB.GetFtUtxoByOutpoint(txPoint)
 		if err == nil {
 			for _, utxo := range incomeList {
 				if utxo.Index == preTxIndex {
@@ -898,7 +898,7 @@ func (m *FtMempoolManager) CleanByHeight(height int, bcClient interface{}) error
 					ContractType: contractTypeStr,
 					UtxoId:       common.ConcatBytesOptimized([]string{tx.Txid, strconv.Itoa(k)}, ":"),
 					TxID:         tx.Txid,
-					Address:      address,
+					Address:      ftInfo.Address,
 					Value:        amount,
 					CodeHash:     ftInfo.CodeHash,
 					Genesis:      ftInfo.Genesis,
@@ -1436,4 +1436,39 @@ func (m *FtMempoolManager) GetZmqAddress() string {
 		return m.zmqClient.address
 	}
 	return ""
+}
+
+// GetMempoolAddressFtIncomeMap 获取内存池中所有地址的FT收入数据
+// CodeHash@Genesis@sensibleId@Amount@Index@Value
+func (m *FtMempoolManager) GetMempoolAddressFtIncomeMap() map[string]string {
+	result := make(map[string]string)
+	keyValues, err := m.mempoolAddressFtIncomeDB.GetAllKeyValues()
+	if err != nil {
+		log.Printf("获取所有键值对失败: %v", err)
+		return result
+	}
+
+	for key, value := range keyValues {
+
+		result[key] = value
+	}
+
+	return result
+}
+
+// GetMempoolAddressFtIncomeValidMap 获取内存池中所有地址的有效FT收入数据
+// CodeHash@Genesis@sensibleId@Amount@Index@Value
+func (m *FtMempoolManager) GetMempoolAddressFtIncomeValidMap() map[string]string {
+	result := make(map[string]string)
+	keyValues, err := m.mempoolAddressFtIncomeValidStore.GetAllKeyValues()
+	if err != nil {
+		log.Printf("获取所有键值对失败: %v", err)
+		return result
+	}
+
+	for key, value := range keyValues {
+		result[key] = value
+	}
+
+	return result
 }

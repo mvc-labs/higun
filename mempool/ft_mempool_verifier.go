@@ -86,6 +86,12 @@ func (m *FtMempoolVerifier) verifyMempoolFtUtxos() error {
 	// 获取所有需要验证的UTXO
 	uncheckData := make(map[string]string)
 
+	if m.mempoolManager == nil {
+		return fmt.Errorf("mempoolManager is nil")
+	}
+	if m.mempoolManager.mempoolUncheckFtOutpointStore == nil {
+		return fmt.Errorf("mempoolUncheckFtOutpointStore is nil")
+	}
 	// 获取所有未检查的UTXO
 	utxoList, err := m.mempoolManager.mempoolUncheckFtOutpointStore.GetFtUtxo()
 	if err != nil {
