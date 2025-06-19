@@ -297,8 +297,6 @@ func GetAddressFromScript(pubKey string, pkScript []byte, params *chaincfg.Param
 		address = "errAddress"
 		return
 	}
-
-	return
 }
 
 // DeserializeTransaction 将字节数组反序列化为交易
