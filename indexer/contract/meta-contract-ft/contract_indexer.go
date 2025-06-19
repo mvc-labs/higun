@@ -38,6 +38,8 @@ type ContractFtIndexer struct {
 	uniqueFtIncomeStore *storage.PebbleStore // 存储unique合约UTXO数据 key:codeHash@genesis, value: TxID@Index@Value@sensibleId@customData@height,...
 	uniqueFtSpendStore  *storage.PebbleStore // 存储unique合约UTXO数据 key:codeHash@genesis, value: TxID@Index@usedTxId,...
 
+	invalidFtOutpointStore *storage.PebbleStore // 存储无效的FT合约Utxo数据  key: outpoint, value: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height@reason,...
+
 	metaStore   *storage.MetaStore // 存储元数据
 	mu          sync.RWMutex
 	bar         *progressbar.ProgressBar
@@ -63,7 +65,8 @@ func NewContractFtIndexer(params config.IndexerParams,
 	uncheckFtOutpointStore,
 	usedFtIncomeStore,
 	uniqueFtIncomeStore,
-	uniqueFtSpendStore *storage.PebbleStore,
+	uniqueFtSpendStore,
+	invalidFtOutpointStore *storage.PebbleStore,
 	metaStore *storage.MetaStore) *ContractFtIndexer {
 	return &ContractFtIndexer{
 		params:                       params,
@@ -79,6 +82,7 @@ func NewContractFtIndexer(params config.IndexerParams,
 		usedFtIncomeStore:            usedFtIncomeStore,
 		uniqueFtIncomeStore:          uniqueFtIncomeStore,
 		uniqueFtSpendStore:           uniqueFtSpendStore,
+		invalidFtOutpointStore:       invalidFtOutpointStore,
 		metaStore:                    metaStore,
 	}
 }
@@ -377,6 +381,22 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 
 		//处理usedFtIncomeStore
 		usedFtIncomeMap := make(map[string][]string)
+		// if block.Height == 65369 {
+		// 	fmt.Println("block.Height == 65369")
+		// 	for k, v := range addressFtResult {
+		// 		fmt.Println("k: ", k)
+		// 		fmt.Println("v: ", v)
+		// 	}
+
+		// 	fmt.Println("--------------------------------")
+		// 	//打印txPointUsedMap
+		// 	fmt.Println("len: block.Transactions: ", len(block.Transactions))
+		// 	fmt.Println("batchPoints: ", batchPoints)
+		// 	fmt.Println("--------------------------------")
+		// 	fmt.Println("txPointUsedMap: ", txPointUsedMap)
+		// 	fmt.Println("--------------------------------")
+
+		// }
 		for k, vList := range addressFtResult {
 			for _, v := range vList {
 				//k: FtAddress
@@ -527,16 +547,17 @@ func (i *ContractFtIndexer) processContractFtInputs(block *ContractFtBlock) erro
 		for k := range usedFtIncomeMap {
 			delete(usedFtIncomeMap, k)
 		}
-		for k := range txPointUsedMap {
-			delete(txPointUsedMap, k)
-		}
+
 		addressFtResult = nil
 		uniqueFtResult = nil
 		usedFtIncomeMap = nil
-		txPointUsedMap = nil
 		batchPoints = nil
 	}
 
+	for k := range txPointUsedMap {
+		delete(txPointUsedMap, k)
+	}
+	txPointUsedMap = nil
 	allTxPoints = nil
 	usedGenesisUtxoMap = nil
 	return nil
@@ -718,3 +739,22 @@ func (i *ContractFtIndexer) SetMempoolManager(mempoolMgr FtMempoolManager) {
 
 // 	return nil
 // }
+
+// GetInvalidFtOutpointStore 返回无效FT合约UTXO存储对象
+func (i *ContractFtIndexer) GetInvalidFtOutpointStore() *storage.PebbleStore {
+	return i.invalidFtOutpointStore
+}
+
+// QueryInvalidFtOutpoint 查询无效的FT合约UTXO数据
+// outpoint: 交易输出点，格式为 "txID:index"
+// 返回: FtAddress@CodeHash@Genesis@sensibleId@Amount@TxID@Index@Value@height@reason
+func (i *ContractFtIndexer) QueryInvalidFtOutpoint(outpoint string) (string, error) {
+	value, err := i.invalidFtOutpointStore.Get([]byte(outpoint))
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return "", nil
+		}
+		return "", fmt.Errorf("查询无效FT合约UTXO失败: %w", err)
+	}
+	return string(value), nil
+}

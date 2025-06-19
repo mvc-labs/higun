@@ -360,10 +360,10 @@ func (s *SimpleDB) AddRecord(utxoID string, address string, value []byte) error 
 	mainKey2 := []byte(address + "_" + utxoID)
 	//fmt.Println("mainKey1:", string(mainKey1), "mainKey2:", string(mainKey2))
 	// 在批处理中添加增加操作
-	if err := batch.Set(mainKey1, value, pebble.NoSync); err != nil {
+	if err := batch.Set(mainKey1, value, pebble.Sync); err != nil {
 		return fmt.Errorf("批处理增加键1失败: %w", err)
 	}
-	if err := batch.Set(mainKey2, value, pebble.NoSync); err != nil {
+	if err := batch.Set(mainKey2, value, pebble.Sync); err != nil {
 		return fmt.Errorf("批处理增加键2失败: %w", err)
 	}
 
@@ -384,7 +384,7 @@ func (s *SimpleDB) AddSimpleRecord(key string, value []byte) error {
 	// 1. 主键
 	mainKey := []byte(key)
 	// 在批处理中添加增加操作
-	if err := batch.Set(mainKey, value, pebble.NoSync); err != nil {
+	if err := batch.Set(mainKey, value, pebble.Sync); err != nil {
 		return fmt.Errorf("批处理增加键1失败: %w", err)
 	}
 
@@ -408,7 +408,7 @@ func (s *SimpleDB) DeleteSimpleRecord(key string) error {
 	batch := s.db.NewBatch()
 	defer batch.Close()
 
-	if err := batch.Delete([]byte(key), pebble.NoSync); err != nil {
+	if err := batch.Delete([]byte(key), pebble.Sync); err != nil {
 		return fmt.Errorf("批处理删除键失败: %w", err)
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
@@ -428,10 +428,10 @@ func (s *SimpleDB) DeleteRecord(utxoID string, address string) error {
 	mainKey2 := []byte(address + "_" + utxoID)
 
 	// 在批处理中添加删除操作
-	if err := batch.Delete(mainKey1, pebble.NoSync); err != nil {
+	if err := batch.Delete(mainKey1, pebble.Sync); err != nil {
 		return fmt.Errorf("批处理删除键1失败: %w", err)
 	}
-	if err := batch.Delete(mainKey2, pebble.NoSync); err != nil {
+	if err := batch.Delete(mainKey2, pebble.Sync); err != nil {
 		return fmt.Errorf("批处理删除键2失败: %w", err)
 	}
 

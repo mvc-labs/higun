@@ -114,6 +114,12 @@ func main() {
 	}
 	defer uniqueFtSpendStore.Close()
 
+	invalidFtOutpointStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeInvalidFtOutpoint, cfg.ShardCount)
+	if err != nil {
+		log.Fatalf("初始化无效的FT合约Utxo存储失败: %v", err)
+	}
+	defer invalidFtOutpointStore.Close()
+
 	// 创建区块链客户端
 	bcClient, err := blockchain.NewFtClient(cfg)
 	if err != nil {
@@ -171,6 +177,7 @@ func main() {
 		usedFtIncomeStore,
 		uniqueFtIncomeStore,
 		uniqueFtSpendStore,
+		invalidFtOutpointStore,
 		metaStore)
 
 	// 创建并启动FT验证管理器
@@ -234,13 +241,24 @@ func main() {
 
 	log.Println("开始FT区块同步...")
 
-	onStartMempoolSyncDone := func() {
-		log.Println("开始内存池同步")
+	firstSyncCompleted := func() {
+		log.Println("初始同步完成，启动内存池")
+		err := server.RebuildMempool()
+		if err != nil {
+			log.Printf("重建内存池失败: %v", err)
+			return
+		}
+		err = server.StartMempoolCore()
+		if err != nil {
+			log.Printf("启动内存池核心失败: %v", err)
+			return
+		}
+		log.Println("内存池核心已启动")
 	}
 
 	// 使用goroutine启动区块同步
 	go func() {
-		if err := bcClient.SyncBlocks(idx, checkInterval, stopCh, onStartMempoolSyncDone); err != nil {
+		if err := bcClient.SyncBlocks(idx, checkInterval, stopCh, firstSyncCompleted); err != nil {
 			log.Fatalf("同步FT区块失败: %v", err)
 		}
 	}()

@@ -975,14 +975,21 @@ func (m *FtMempoolManager) InitializeMempool(bcClient interface{}) {
 
 			for _, txid := range currentBatch {
 				// 获取交易详情
-				tx, err := client.GetRawTransaction(txid)
+				txRaw, err := client.GetRawTransactionHex(txid)
 				if err != nil {
-					log.Printf("获取交易详情失败 %s: %v", txid, err)
+					fmt.Println("GetRawTransaction error", err)
 					continue
 				}
-
-				// 使用现有的交易处理方法处理交易
-				msgTx := tx.MsgTx()
+				txRawByte, err := hex.DecodeString(txRaw)
+				if err != nil {
+					fmt.Println("DecodeString error", err)
+					continue
+				}
+				msgTx, err := DeserializeTransaction(txRawByte)
+				if err != nil {
+					fmt.Println("DeserializeTransaction error", err)
+					continue
+				}
 
 				// 先处理输出（创建新的UTXO）
 				isFtTx, err := m.processFtOutputs(msgTx)

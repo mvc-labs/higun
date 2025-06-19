@@ -5,6 +5,7 @@ go 1.22
 toolchain go1.23.9
 
 require (
+	github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173
 	github.com/btcsuite/btcd v0.24.2
 	github.com/btcsuite/btcd/btcutil v1.1.5
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0

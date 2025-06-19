@@ -747,7 +747,7 @@ func (s *FtServer) getAllDbUsedFtIncome(c *gin.Context) {
 	startTime := time.Now().UnixMilli()
 
 	// 获取 key 参数
-	key := c.Query("key")
+	txId := c.Query("txId")
 
 	// 获取分页参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -761,14 +761,14 @@ func (s *FtServer) getAllDbUsedFtIncome(c *gin.Context) {
 	}
 
 	// 获取数据
-	data, err := s.indexer.GetAllDbUsedFtIncome(key)
+	data, err := s.indexer.GetAllDbUsedFtIncome(txId)
 	if err != nil {
 		c.JSONP(http.StatusInternalServerError, respond.RespErr(err, time.Now().UnixMilli()-startTime, http.StatusInternalServerError))
 		return
 	}
 
 	// 如果提供了 key，直接返回结果
-	if key != "" {
+	if txId != "" {
 		c.JSONP(http.StatusOK, respond.RespSuccess(respond.FtUsedIncomeResponse{
 			Data: data,
 		}, time.Now().UnixMilli()-startTime))

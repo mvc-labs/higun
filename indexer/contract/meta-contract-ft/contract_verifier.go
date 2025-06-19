@@ -195,17 +195,22 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	// 解析outpoint获取txId
 	txId := strings.Split(outpoint, ":")[0]
 
-	fmt.Printf("[BLOCK]验证UTXO: %s, %s\n", outpoint, utxoData)
+	// fmt.Printf("[BLOCK]验证UTXO: %s, %s\n", outpoint, utxoData)
 
 	// 从usedFtIncomeStore获取使用该UTXO的交易
 	usedData, err := m.indexer.usedFtIncomeStore.Get([]byte(txId))
 	if err != nil {
 		if err == storage.ErrNotFound {
+			err = m.indexer.invalidFtOutpointStore.Set([]byte(outpoint), []byte(utxoData+"@not_used-usedFtIncomeStore_not_found"))
+			if err != nil {
+				return errors.New("设置无效的UTXO失败: " + err.Error())
+			}
 			// 如果找不到使用记录，说明UTXO未被使用，可以删除
 			err = m.indexer.uncheckFtOutpointStore.Delete([]byte(outpoint))
 			if err != nil {
 				return errors.New("删除未检查的UTXO失败: " + err.Error())
 			}
+
 			return nil
 		}
 		return errors.New("获取使用记录失败: " + err.Error())
@@ -293,6 +298,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		}
 	}
 
+	hasMatch := false
 	// 解析使用记录
 	usedList := strings.Split(string(usedData), ",")
 	for _, used := range usedList {
@@ -338,6 +344,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == tokenCodeHash && usedParts[2] == tokenHash && usedParts[3] == sensibleId {
+			hasMatch = true
 			fmt.Printf("[BLOCK]匹配intputs和token成功: %s\n", outpoint)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
@@ -346,6 +353,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[1] == genesisCodeHash && usedParts[2] == genesisHash && usedParts[3] == sensibleId {
+			hasMatch = true
 			fmt.Printf("[BLOCK]匹配intputs和genesis成功: %s\n", outpoint)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
@@ -354,12 +362,23 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 			break
 		}
 		if usedParts[5] == genesisTxId {
+			hasMatch = true
 			fmt.Printf("[BLOCK]匹配intputs和genesisTxId成功: %s\n", outpoint)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 				return err
 			}
 			break
+		}
+	}
+	if !hasMatch {
+		//打印codeHash,genesis,sensibleId
+		// fmt.Printf("[BLOCK]codeHash: %s, genesis: %s, sensibleId: %s\n", codeHash, genesis, sensibleId)
+		//打印 tokenCodeHash,tokenHash,genesisHash,genesisCodeHash,genesisTxId
+		// fmt.Printf("[BLOCK]tokenCodeHash: %s, tokenHash: %s, genesisHash: %s, genesisCodeHash: %s, genesisTxId: %s\n", tokenCodeHash, tokenHash, genesisHash, genesisCodeHash, genesisTxId)
+		err = m.indexer.invalidFtOutpointStore.Set([]byte(outpoint), []byte(utxoData+"@not_used-not_match"))
+		if err != nil {
+			return errors.New("设置无效的UTXO失败: " + err.Error())
 		}
 	}
 

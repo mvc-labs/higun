@@ -32,6 +32,7 @@ type Config struct {
 	ZMQAddress              string    `yaml:"zmq_address"`
 	MemPoolCleanStartHeight int       `yaml:"mempool_clean_start_height"`
 	MaxTxPerBatch           int       `yaml:"max_tx_per_batch"`
+	RawTxInBlock            bool      `yaml:"raw_tx_in_block"`
 	RPC                     RPCConfig `yaml:"rpc"`
 }
 

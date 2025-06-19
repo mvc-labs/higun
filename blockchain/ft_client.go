@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	indexer "github.com/metaid/utxo_indexer/indexer/contract/meta-contract-ft"
@@ -57,6 +58,10 @@ func (c *FtClient) GetBlock(hash *chainhash.Hash) (*btcjson.GetBlockVerboseTxRes
 	return c.rpcClient.GetBlockVerboseTx(hash)
 }
 
+func (c *FtClient) GetBlockVerbose(hash *chainhash.Hash) (*btcjson.GetBlockVerboseResult, error) {
+	return c.rpcClient.GetBlockVerbose(hash)
+}
+
 func (c *FtClient) GetBlockHash(height int64) (*chainhash.Hash, error) {
 	hash, err := c.rpcClient.GetBlockHash(height)
 	if err != nil {
@@ -92,6 +97,41 @@ func (c *FtClient) GetRawTransaction(txHashStr string) (*btcutil.Tx, error) {
 	}
 	return tx, nil
 }
+
+func (c *FtClient) GetRawTransactionHex(txHashStr string) (string, error) {
+	txHash, err := chainhash.NewHashFromStr(txHashStr)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse transaction hash %s: %w", txHashStr, err)
+	}
+
+	// 使用 RawRequest 直接调用 getrawtransaction RPC 命令
+	params := []json.RawMessage{
+		json.RawMessage(fmt.Sprintf(`"%s"`, txHash.String())),
+	}
+	result, err := c.rpcClient.RawRequest("getrawtransaction", params)
+	if err != nil {
+		return "", fmt.Errorf("failed to get transaction hex %s: %w", txHash, err)
+	}
+
+	var txHex string
+	if err := json.Unmarshal(result, &txHex); err != nil {
+		return "", fmt.Errorf("failed to unmarshal transaction hex: %w", err)
+	}
+
+	return txHex, nil
+}
+
+// func (c *FtClient) GetRawTransactionHex(txHashStr string) (*btcutil.Tx, error) {
+// 	txHash, err := chainhash.NewHashFromStr(txHashStr)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to parse transaction hash %s: %w", txHashStr, err)
+// 	}
+// 	tx, err := c.rpcClient.GetRawTransactionVerbose(txHash)
+// 	if err != nil {
+// 		return nil,  fmt.Errorf("failed to get transaction %s: %w", txHash, err)
+// 	}
+// 	return tx, nil
+// }
 
 func (c *FtClient) GetBlockCount() (int, error) {
 	count, err := c.rpcClient.GetBlockCount()
@@ -165,13 +205,27 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 		return fmt.Errorf("获取区块哈希失败，高度 %d: %w", height, err)
 	}
 
-	block, err := c.GetBlock(hash)
+	// 首先使用GetBlockVerbose获取区块大小
+	blockVerbose, err := c.GetBlockVerbose(hash)
 	if err != nil {
 		return fmt.Errorf("获取区块失败，高度 %d: %w", height, err)
 	}
+
+	txCount := len(blockVerbose.Tx)
+	blockSize := blockVerbose.Size
+	useRawTx := txCount > 100000 || blockSize > 800*1024*1024 // 如果交易数量超过10万或区块大小超过800MB，使用RawTxInBlock模式
+
+	var block *btcjson.GetBlockVerboseTxResult
+	if !useRawTx {
+		block, err = c.GetBlock(hash)
+		if err != nil {
+			return fmt.Errorf("获取区块失败，高度 %d: %w", height, err)
+		}
+	} else {
+		fmt.Printf("[%d]交易数量: %d, 区块大小: %d MB, 使用RawTxInBlock模式\n", height, txCount, blockSize/1024/1024)
+	}
 	t2 := time.Now()
 
-	txCount := len(block.Tx)
 	maxTxPerBatch := c.GetMaxTxPerBatch()
 
 	t3 := time.Now()
@@ -186,13 +240,10 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 		go func() {
 			defer close(doneCh)
 			for convertedBlock := range batchCh {
-				// t5 := time.Now()
 				if err := idx.IndexBlock(convertedBlock, updateHeight); err != nil {
 					errCh <- fmt.Errorf("索引高度 %d 的批次失败: %w", height, err)
 					return
 				}
-				// t6 := time.Now()
-				// fmt.Printf("索引区块 %d-%d 耗时: %v 秒\n", convertedBlock.Height, convertedBlock.Height, t6.Sub(t5).Seconds())
 				convertedBlock.Transactions = nil
 				convertedBlock.ContractFtOutputs = nil
 				convertedBlock = nil
@@ -212,10 +263,13 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 				lastBatch = false
 			}
 
-			// t3 := time.Now()
-			convertedBlock := c.convertBlockBatch(block, height, startIdx, endIdx, lastBatch)
-			// t4 := time.Now()
-			// fmt.Printf("转换区块	 %d-%d 耗时: %v 秒\n", startIdx+1, endIdx, t4.Sub(t3).Seconds())
+			var convertedBlock *indexer.ContractFtBlock
+			if useRawTx {
+				convertedBlock = c.convertBlockBatchByRawTx(blockVerbose, height, startIdx, endIdx, lastBatch)
+			} else {
+				convertedBlock = c.convertBlockBatch(block, height, startIdx, endIdx, lastBatch)
+			}
+
 			if convertedBlock == nil {
 				close(batchCh)
 				return fmt.Errorf("高度 %d 的批次 %d-%d 转换失败", height, startIdx+1, endIdx)
@@ -239,7 +293,12 @@ func (c *FtClient) ProcessBlock(idx *indexer.ContractFtIndexer, height int, upda
 		case <-doneCh:
 		}
 	} else {
-		convertedBlock := c.convertBlock(block, height)
+		var convertedBlock *indexer.ContractFtBlock
+		if useRawTx {
+			convertedBlock = c.convertBlockByRawTx(blockVerbose, height)
+		} else {
+			convertedBlock = c.convertBlock(block, height)
+		}
 		if convertedBlock == nil {
 			return fmt.Errorf("区块转换失败，高度 %d", height)
 		}
@@ -551,6 +610,364 @@ func (c *FtClient) convertBlockBatch(block *btcjson.GetBlockVerboseTxResult, hei
 
 		txs = append(txs, &indexer.ContractFtTransaction{
 			ID:      tx.Txid,
+			Inputs:  inputs,
+			Outputs: outputs,
+		})
+	}
+
+	return &indexer.ContractFtBlock{
+		Height:            height,
+		Transactions:      txs,
+		ContractFtOutputs: contractFtOutputs,
+		IsPartialBlock:    !isLastBatch,
+	}
+}
+
+// convertBlock 转换区块
+func (c *FtClient) convertBlockByRawTx(block *btcjson.GetBlockVerboseResult, height int) *indexer.ContractFtBlock {
+	if height < 0 {
+		return nil
+	}
+
+	maxTxPerBatch := c.GetMaxTxPerBatch()
+	txCount := len(block.Tx)
+
+	if txCount > maxTxPerBatch {
+		fmt.Printf("\n大区块预处理: 高度=%d, 交易数=%d, 超过最大批次大小=%d, 将进行分批转换\n",
+			height, txCount, maxTxPerBatch)
+
+		contractFtOutputs := make(map[string][]*indexer.ContractFtOutput)
+		txs := make([]*indexer.ContractFtTransaction, 0, txCount)
+
+		for _, txId := range block.Tx {
+			txRaw, err := c.GetRawTransactionHex(txId)
+			if err != nil {
+				fmt.Println("GetRawTransaction error", err)
+				return nil
+			}
+			txRawByte, err := hex.DecodeString(txRaw)
+			if err != nil {
+				fmt.Println("DecodeString error", err)
+				return nil
+			}
+			msgTx, err := DeserializeMvcTransaction(txRawByte)
+			if err != nil {
+				fmt.Println("DeserializeMvcTransaction error", err)
+				return nil
+			}
+
+			inputs := make([]*indexer.ContractFtInput, len(msgTx.TxIn))
+			for j, in := range msgTx.TxIn {
+				id := in.PreviousOutPoint.Hash.String()
+				if id == "" {
+					id = "0000000000000000000000000000000000000000000000000000000000000000"
+				}
+				inputs[j] = &indexer.ContractFtInput{
+					TxPoint: common.ConcatBytesOptimized([]string{id, strconv.Itoa(int(in.PreviousOutPoint.Index))}, ":"),
+				}
+			}
+
+			outputs := make([]*indexer.ContractFtOutput, 0)
+			for k, out := range msgTx.TxOut {
+				address := GetAddressFromScript(hex.EncodeToString(out.PkScript), nil, c.params, c.cfg.RPC.Chain)
+				amount := strconv.FormatInt(out.Value, 10)
+
+				// 解析FT相关信息
+				var output *indexer.ContractFtOutput
+				ftInfo, uniqueUtxoInfo, contractTypeStr, err := ParseContractFtInfo(hex.EncodeToString(out.PkScript), c.params)
+				if err != nil {
+					fmt.Println("ParseFtInfo error", err)
+					continue
+				}
+				if contractTypeStr == "ft" {
+					if ftInfo == nil {
+						continue
+					}
+					output = &indexer.ContractFtOutput{
+						ContractType: contractTypeStr,
+						Address:      address,
+						Value:        amount,
+						Index:        int64(k),
+						Height:       int64(height),
+						CodeHash:     ftInfo.CodeHash,
+						Genesis:      ftInfo.Genesis,
+						SensibleId:   ftInfo.SensibleId,
+						Name:         ftInfo.Name,
+						Symbol:       ftInfo.Symbol,
+						Amount:       strconv.FormatUint(ftInfo.Amount, 10),
+						Decimal:      ftInfo.Decimal,
+						FtAddress:    ftInfo.Address,
+					}
+				} else if contractTypeStr == "unique" {
+					if uniqueUtxoInfo == nil {
+						continue
+					}
+					output = &indexer.ContractFtOutput{
+						ContractType: contractTypeStr,
+						Address:      address,
+						Value:        amount,
+						Index:        int64(k),
+						Height:       int64(height),
+						CodeHash:     uniqueUtxoInfo.CodeHash,
+						Genesis:      uniqueUtxoInfo.Genesis,
+						SensibleId:   uniqueUtxoInfo.SensibleId,
+						CustomData:   uniqueUtxoInfo.CustomData,
+					}
+				} else {
+					continue
+				}
+				if output == nil {
+					continue
+				}
+				outputs = append(outputs, output)
+
+				if find := contractFtOutputs[address]; find != nil {
+					contractFtOutputs[address] = append(find, output)
+				} else {
+					contractFtOutputs[address] = []*indexer.ContractFtOutput{output}
+				}
+			}
+
+			txs = append(txs, &indexer.ContractFtTransaction{
+				ID:      txId,
+				Inputs:  inputs,
+				Outputs: outputs,
+			})
+
+			if len(txs) >= maxTxPerBatch {
+				subBlock := &indexer.ContractFtBlock{
+					Height:            height,
+					Transactions:      txs,
+					ContractFtOutputs: contractFtOutputs,
+					IsPartialBlock:    true,
+				}
+				return subBlock
+			}
+		}
+
+		if len(txs) > 0 {
+			subBlock := &indexer.ContractFtBlock{
+				Height:            height,
+				Transactions:      txs,
+				ContractFtOutputs: contractFtOutputs,
+				IsPartialBlock:    false,
+			}
+			return subBlock
+		}
+
+		return nil
+	}
+
+	// 小区块处理
+	contractFtOutputs := make(map[string][]*indexer.ContractFtOutput)
+	txs := make([]*indexer.ContractFtTransaction, len(block.Tx))
+
+	for i, txId := range block.Tx {
+		txRaw, err := c.GetRawTransactionHex(txId)
+		if err != nil {
+			fmt.Println("GetRawTransaction error", err)
+			return nil
+		}
+		txRawByte, err := hex.DecodeString(txRaw)
+		if err != nil {
+			fmt.Println("DecodeString error", err)
+			return nil
+		}
+		msgTx, err := DeserializeMvcTransaction(txRawByte)
+		if err != nil {
+			fmt.Println("DeserializeMvcTransaction error", err)
+			return nil
+		}
+
+		inputs := make([]*indexer.ContractFtInput, len(msgTx.TxIn))
+		for j, in := range msgTx.TxIn {
+			id := in.PreviousOutPoint.Hash.String()
+			if id == "" {
+				id = "0000000000000000000000000000000000000000000000000000000000000000"
+			}
+			inputs[j] = &indexer.ContractFtInput{
+				TxPoint: common.ConcatBytesOptimized([]string{id, strconv.Itoa(int(in.PreviousOutPoint.Index))}, ":"),
+			}
+		}
+
+		outputs := make([]*indexer.ContractFtOutput, 0)
+		for k, out := range msgTx.TxOut {
+			address := GetAddressFromScript(hex.EncodeToString(out.PkScript), nil, c.params, c.cfg.RPC.Chain)
+			amount := strconv.FormatInt(out.Value, 10)
+
+			// 解析FT相关信息
+			ftInfo, uniqueUtxoInfo, contractTypeStr, err := ParseContractFtInfo(hex.EncodeToString(out.PkScript), c.params)
+			if err != nil {
+				fmt.Println("ParseFtInfo error", err)
+				return nil
+			}
+			var output *indexer.ContractFtOutput
+			if contractTypeStr == "ft" {
+				if ftInfo == nil {
+					continue
+				}
+				output = &indexer.ContractFtOutput{
+					ContractType: contractTypeStr,
+					Address:      address,
+					Value:        amount,
+					Index:        int64(k),
+					Height:       int64(height),
+					CodeHash:     ftInfo.CodeHash,
+					Genesis:      ftInfo.Genesis,
+					SensibleId:   ftInfo.SensibleId,
+					Name:         ftInfo.Name,
+					Symbol:       ftInfo.Symbol,
+					Amount:       strconv.FormatUint(ftInfo.Amount, 10),
+					Decimal:      ftInfo.Decimal,
+					FtAddress:    ftInfo.Address,
+				}
+			} else if contractTypeStr == "unique" {
+				if uniqueUtxoInfo == nil {
+					continue
+				}
+				output = &indexer.ContractFtOutput{
+					ContractType: contractTypeStr,
+					Address:      address,
+					Value:        amount,
+					Index:        int64(k),
+					Height:       int64(height),
+					CodeHash:     uniqueUtxoInfo.CodeHash,
+					Genesis:      uniqueUtxoInfo.Genesis,
+					SensibleId:   uniqueUtxoInfo.SensibleId,
+					CustomData:   uniqueUtxoInfo.CustomData,
+				}
+			} else {
+				continue
+			}
+			if output == nil {
+				continue
+			}
+			outputs = append(outputs, output)
+
+			if find := contractFtOutputs[address]; find != nil {
+				contractFtOutputs[address] = append(find, output)
+			} else {
+				contractFtOutputs[address] = []*indexer.ContractFtOutput{output}
+			}
+		}
+
+		txs[i] = &indexer.ContractFtTransaction{
+			ID:      txId,
+			Inputs:  inputs,
+			Outputs: outputs,
+		}
+	}
+
+	return &indexer.ContractFtBlock{
+		Height:            height,
+		Transactions:      txs,
+		ContractFtOutputs: contractFtOutputs,
+	}
+}
+
+// convertBlockBatch 转换区块中指定范围的交易
+func (c *FtClient) convertBlockBatchByRawTx(block *btcjson.GetBlockVerboseResult, height int, startIdx int, endIdx int, isLastBatch bool) *indexer.ContractFtBlock {
+	if height < 0 || startIdx < 0 || endIdx <= startIdx || endIdx > len(block.Tx) {
+		return nil
+	}
+
+	contractFtOutputs := make(map[string][]*indexer.ContractFtOutput)
+	txsCount := endIdx - startIdx
+	txs := make([]*indexer.ContractFtTransaction, 0, txsCount)
+
+	for i := startIdx; i < endIdx; i++ {
+		txId := block.Tx[i]
+
+		txRaw, err := c.GetRawTransactionHex(txId)
+		if err != nil {
+			fmt.Println("GetRawTransaction error", err)
+			return nil
+		}
+		txRawByte, err := hex.DecodeString(txRaw)
+		if err != nil {
+			fmt.Println("DecodeString error", err)
+			return nil
+		}
+		msgTx, err := DeserializeMvcTransaction(txRawByte)
+		if err != nil {
+			fmt.Println("DeserializeMvcTransaction error", err)
+			return nil
+		}
+
+		inputs := make([]*indexer.ContractFtInput, len(msgTx.TxIn))
+		for j, in := range msgTx.TxIn {
+			id := in.PreviousOutPoint.Hash.String()
+			if id == "" {
+				id = "0000000000000000000000000000000000000000000000000000000000000000"
+			}
+			inputs[j] = &indexer.ContractFtInput{
+				TxPoint: common.ConcatBytesOptimized([]string{id, strconv.Itoa(int(in.PreviousOutPoint.Index))}, ":"),
+			}
+		}
+
+		outputs := make([]*indexer.ContractFtOutput, 0)
+		for k, out := range msgTx.TxOut {
+			address := GetAddressFromScript(hex.EncodeToString(out.PkScript), nil, c.params, c.cfg.RPC.Chain)
+			amount := strconv.FormatInt(out.Value, 10)
+
+			// 解析FT相关信息
+			ftInfo, uniqueUtxoInfo, contractTypeStr, err := ParseContractFtInfo(hex.EncodeToString(out.PkScript), c.params)
+			if err != nil {
+				fmt.Println("ParseFtInfo error", err)
+				return nil
+			}
+			var output *indexer.ContractFtOutput
+			if contractTypeStr == "ft" {
+				if ftInfo == nil {
+					continue
+				}
+				output = &indexer.ContractFtOutput{
+					ContractType: contractTypeStr,
+					Address:      address,
+					Value:        amount,
+					Index:        int64(k),
+					Height:       int64(height),
+					CodeHash:     ftInfo.CodeHash,
+					Genesis:      ftInfo.Genesis,
+					SensibleId:   ftInfo.SensibleId,
+					Name:         ftInfo.Name,
+					Symbol:       ftInfo.Symbol,
+					Amount:       strconv.FormatUint(ftInfo.Amount, 10),
+					Decimal:      ftInfo.Decimal,
+					FtAddress:    ftInfo.Address,
+				}
+			} else if contractTypeStr == "unique" {
+				if uniqueUtxoInfo == nil {
+					continue
+				}
+				output = &indexer.ContractFtOutput{
+					ContractType: contractTypeStr,
+					Address:      address,
+					Value:        amount,
+					Index:        int64(k),
+					Height:       int64(height),
+					CodeHash:     uniqueUtxoInfo.CodeHash,
+					Genesis:      uniqueUtxoInfo.Genesis,
+					SensibleId:   uniqueUtxoInfo.SensibleId,
+					CustomData:   uniqueUtxoInfo.CustomData,
+				}
+			} else {
+				continue
+			}
+			if output == nil {
+				continue
+			}
+			outputs = append(outputs, output)
+
+			if find := contractFtOutputs[address]; find != nil {
+				contractFtOutputs[address] = append(find, output)
+			} else {
+				contractFtOutputs[address] = []*indexer.ContractFtOutput{output}
+			}
+		}
+
+		txs = append(txs, &indexer.ContractFtTransaction{
+			ID:      txId,
 			Inputs:  inputs,
 			Outputs: outputs,
 		})

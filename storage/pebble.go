@@ -93,6 +93,7 @@ const (
 	StoreTypeUsedFTIncome
 	StoreTypeUniqueFTIncome
 	StoreTypeUniqueFTSpend
+	StoreTypeInvalidFtOutpoint
 )
 
 func NewMetaStore(dataDir string) (*MetaStore, error) {
@@ -157,6 +158,8 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 			dbPath = filepath.Join(dataDir, "unique_ft_income", fmt.Sprintf("shard_%d", i))
 		case StoreTypeUniqueFTSpend:
 			dbPath = filepath.Join(dataDir, "unique_ft_spend", fmt.Sprintf("shard_%d", i))
+		case StoreTypeInvalidFtOutpoint:
+			dbPath = filepath.Join(dataDir, "invalid_ft_outpoint", fmt.Sprintf("shard_%d", i))
 		}
 		// Create parent directories if needed
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
@@ -372,7 +375,7 @@ func (s *PebbleStore) Delete(key []byte) error {
 }
 func (s *PebbleStore) Set(key, value []byte) error {
 	db := s.getShard(string(key))
-	return db.Set(key, value, pebble.NoSync)
+	return db.Set(key, value, pebble.Sync)
 }
 
 func (s *PebbleStore) Put(key, value []byte) error {
@@ -472,7 +475,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 				}
 
 				// 合并写入
-				if err := batch.Merge([]byte(job.key), job.value, pebble.NoSync); err != nil {
+				if err := batch.Merge([]byte(job.key), job.value, pebble.Sync); err != nil {
 					shardMutexes[job.shardIdx].Unlock()
 					select {
 					case errCh <- fmt.Errorf("merge failed on shard %d: %w", job.shardIdx, err):
@@ -484,7 +487,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 				// 检查批处理大小并适时提交
 				batchItemCounters[job.shardIdx]++
 				if batchItemCounters[job.shardIdx] >= maxBatchItems || batch.Len() >= maxBatchSize {
-					if err := batch.Commit(pebble.NoSync); err != nil {
+					if err := batch.Commit(pebble.Sync); err != nil {
 						shardMutexes[job.shardIdx].Unlock()
 						select {
 						case errCh <- fmt.Errorf("commit failed on shard %d: %w", job.shardIdx, err):
@@ -529,7 +532,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 		shardMutexes[i].Lock() // 加锁保护批次提交
 		if batch != nil && batch.Len() > 0 {
 			// 只有最后一个批次使用Sync，其他用NoSync
-			commitOption := pebble.NoSync
+			commitOption := pebble.Sync
 			if i == len(shardBatches)-1 {
 				commitOption = pebble.Sync
 			}
@@ -896,7 +899,7 @@ func (s *PebbleStore) BulkMergeConcurrent(data *map[string]string, concurrency i
 					shardBatches[job.shardIdx] = batch
 				}
 
-				if err := batch.Merge([]byte(job.key), job.value, pebble.NoSync); err != nil {
+				if err := batch.Merge([]byte(job.key), job.value, pebble.Sync); err != nil {
 					shardMutexes[job.shardIdx].Unlock()
 					select {
 					case errCh <- fmt.Errorf("merge failed on shard %d: %w", job.shardIdx, err):
@@ -907,7 +910,7 @@ func (s *PebbleStore) BulkMergeConcurrent(data *map[string]string, concurrency i
 
 				batchItemCounters[job.shardIdx]++
 				if batchItemCounters[job.shardIdx] >= maxBatchItems || batch.Len() >= maxBatchSize {
-					if err := batch.Commit(pebble.NoSync); err != nil {
+					if err := batch.Commit(pebble.Sync); err != nil {
 						shardMutexes[job.shardIdx].Unlock()
 						select {
 						case errCh <- fmt.Errorf("commit failed on shard %d: %w", job.shardIdx, err):
@@ -948,7 +951,7 @@ func (s *PebbleStore) BulkMergeConcurrent(data *map[string]string, concurrency i
 	for i, batch := range shardBatches {
 		shardMutexes[i].Lock()
 		if batch != nil && batch.Len() > 0 {
-			commitOption := pebble.NoSync
+			commitOption := pebble.Sync
 			if i == len(shardBatches)-1 {
 				commitOption = pebble.Sync
 			}
