@@ -209,8 +209,8 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 	ftAddress := utxoParts[0]
 	codeHash := utxoParts[1]
 	genesis := utxoParts[2]
-	sensibleId := utxoParts[3]
-	if sensibleId == "000000000000000000000000000000000000000000000000000000000000000000000000" {
+	utxoSensibleId := utxoParts[3]
+	if utxoSensibleId == "000000000000000000000000000000000000000000000000000000000000000000000000" {
 		// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 		if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {
 			return errors.New("添加有效UTXO数据失败: " + err.Error())
@@ -218,7 +218,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 		return m.mempoolManager.mempoolUncheckFtOutpointStore.DeleteSimpleRecord(outpoint)
 	}
 
-	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(sensibleId)
+	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(utxoSensibleId)
 	if err != nil {
 		return err
 	}
@@ -226,6 +226,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 	tokenCodeHash := ""
 	genesisHash := ""
 	genesisCodeHash := ""
+	sensibleId := ""
 
 	usedOutpoint := genesisTxId + ":" + strconv.Itoa(int(genesisIndex))
 
@@ -333,7 +334,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 		*/
 
 		// 检查codeHash、genesis和sensibleId是否匹配
-		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == sensibleId {
+		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == utxoSensibleId {
 			fmt.Printf("[MEMPOOL]匹配intputs和output成功: %s, %s\n", outpoint, utxoData)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(outpoint, ftAddress, utxoData); err != nil {

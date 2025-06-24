@@ -221,11 +221,11 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	ftAddress := utxoParts[0]
 	codeHash := utxoParts[1]
 	genesis := utxoParts[2]
-	sensibleId := utxoParts[3]
+	utxoSensibleId := utxoParts[3]
 	// if outpoint == "ab59d2bc50a8d6bcc7c1234c59af54e4ea6d0eab7d2b57009b6ca85f57c52dec:0" {
 	// 	fmt.Printf("找到：sensibleId: %s, genesis: %s, codeHash: %s, ftAddress: %s\n", sensibleId, genesis, codeHash, ftAddress)
 	// }
-	if sensibleId == "000000000000000000000000000000000000000000000000000000000000000000000000" {
+	if utxoSensibleId == "000000000000000000000000000000000000000000000000000000000000000000000000" {
 		// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 		if err := m.addToValidStore(ftAddress, utxoData); err != nil {
 			return errors.New("添加有效UTXO数据失败: " + err.Error())
@@ -234,7 +234,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	}
 	// fmt.Printf("sensibleId: %s\n", sensibleId)
 
-	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(sensibleId)
+	genesisTxId, genesisIndex, err := decoder.ParseSensibleId(utxoSensibleId)
 	if err != nil {
 		return errors.New("解析sensibleId失败: " + err.Error())
 	}
@@ -242,6 +242,7 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 	tokenCodeHash := ""
 	genesisHash := ""
 	genesisCodeHash := ""
+	sensibleId := ""
 
 	usedGenesisOutpoint := genesisTxId + ":" + strconv.Itoa(int(genesisIndex))
 
@@ -335,7 +336,8 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		*/
 
 		// 检查codeHash、genesis和sensibleId是否匹配
-		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == sensibleId {
+		if usedParts[1] == codeHash && usedParts[2] == genesis && usedParts[3] == utxoSensibleId {
+			hasMatch = true
 			fmt.Printf("[BLOCK]匹配intputs和output成功: %s\n", outpoint)
 			// 匹配成功，将UTXO添加到addressFtIncomeValidStore
 			if err := m.addToValidStore(ftAddress, utxoData); err != nil {
@@ -372,10 +374,11 @@ func (m *FtVerifyManager) verifyUtxo(outpoint, utxoData string) error {
 		}
 	}
 	if !hasMatch {
+		fmt.Printf("[BLOCK][Failed]匹配失败: %s\n", outpoint)
 		//打印codeHash,genesis,sensibleId
-		// fmt.Printf("[BLOCK]codeHash: %s, genesis: %s, sensibleId: %s\n", codeHash, genesis, sensibleId)
+		fmt.Printf("[BLOCK][Failed]codeHash: %s, genesis: %s, utxoSensibleId: %s\n", codeHash, genesis, utxoSensibleId)
 		//打印 tokenCodeHash,tokenHash,genesisHash,genesisCodeHash,genesisTxId
-		// fmt.Printf("[BLOCK]tokenCodeHash: %s, tokenHash: %s, genesisHash: %s, genesisCodeHash: %s, genesisTxId: %s\n", tokenCodeHash, tokenHash, genesisHash, genesisCodeHash, genesisTxId)
+		fmt.Printf("[BLOCK][Failed]tokenCodeHash: %s, tokenHash: %s, sensibleId: %s, genesisHash: %s, genesisCodeHash: %s, genesisTxId: %s\n", tokenCodeHash, tokenHash, sensibleId, genesisHash, genesisCodeHash, genesisTxId)
 		err = m.indexer.invalidFtOutpointStore.Set([]byte(outpoint), []byte(utxoData+"@not_used-not_match"))
 		if err != nil {
 			return errors.New("设置无效的UTXO失败: " + err.Error())
