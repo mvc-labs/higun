@@ -25,6 +25,10 @@ type Config struct {
 	Network                 string    `yaml:"network"`
 	DataDir                 string    `yaml:"data_dir"`
 	ShardCount              int       `yaml:"shard_count"`
+	BatchSize               int       `yaml:"batch_size"`
+	OnceTxCount             int       `yaml:"once_tx_count"`
+	TxConcurrency           int       `yaml:"tx_concurrency"`
+	Workers                 int       `yaml:"workers"`
 	CPUCores                int       `yaml:"cpu_cores"`
 	MemoryGB                int       `yaml:"memory_gb"`
 	HighPerf                bool      `yaml:"high_perf"`
@@ -111,12 +115,12 @@ func LoadConfig(path string) (*Config, error) {
 			cfg.MemPoolCleanStartHeight = height
 		}
 	}
-	if maxTxPerBatch := os.Getenv("MAX_TX_PER_BATCH"); maxTxPerBatch != "" {
-		val, err := strconv.Atoi(maxTxPerBatch)
-		if err == nil && val > 0 {
-			cfg.MaxTxPerBatch = val
-		}
-	}
+	// if maxTxPerBatch := os.Getenv("MAX_TX_PER_BATCH"); maxTxPerBatch != "" {
+	// 	val, err := strconv.Atoi(maxTxPerBatch)
+	// 	if err == nil && val > 0 {
+	// 		cfg.MaxTxPerBatch = val
+	// 	}
+	// }
 
 	// Ensure data dir exists
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {

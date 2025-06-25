@@ -30,10 +30,11 @@ func main() {
 	}
 	config.GlobalConfig = cfg
 	config.GlobalNetwork, _ = cfg.GetChainParams()
-	//执行区块信息索引
+	// //执行区块信息索引
 	fmt.Println("正在初始化区块信息索引...")
 	blockindexer.IndexerInit("blockinfo_data", cfg)
 	go blockindexer.DoBlockInfoIndex()
+	go blockindexer.SaveBlockInfoData()
 	log.Println("0.==============>")
 	// 创建自动配置
 	params := config.AutoConfigure(config.SystemResources{
@@ -42,7 +43,7 @@ func main() {
 		HighPerf:   cfg.HighPerf,
 		ShardCount: cfg.ShardCount,
 	})
-	params.MaxTxPerBatch = cfg.MaxTxPerBatch
+	params.MaxTxPerBatch = config.GlobalConfig.MaxTxPerBatch
 	common.InitBytePool(params.BytePoolSizeKB)
 	log.Println("1.==============>")
 	storage.DbInit(params)
@@ -166,7 +167,7 @@ func main() {
 		lastHeightInt = 0
 		log.Printf("上次高度转换失败，从0开始: %v", err)
 	}
-
+	lastHeightInt = 121050
 	// Initialize progress bar
 	idx.InitProgressBar(bestHeight, lastHeightInt)
 
@@ -210,6 +211,7 @@ func main() {
 	}
 }
 func firstSyncCompleted() {
+	//return
 	log.Println("初始同步完成，启动内存池")
 	err := ApiServer.RebuildMempool()
 	if err != nil {

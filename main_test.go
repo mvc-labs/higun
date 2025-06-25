@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"testing"
 
 	"github.com/btcsuite/btcd/txscript"
-	"github.com/cockroachdb/pebble/v2"
+	//"github.com/btcsuite/btcd/wire"
+	"github.com/bitcoinsv/bsvd/wire"
+	"github.com/cockroachdb/pebble"
 	"github.com/metaid/utxo_indexer/blockchain"
 	"github.com/metaid/utxo_indexer/config"
 	"github.com/metaid/utxo_indexer/storage"
@@ -116,7 +120,7 @@ func TestGetTx(t *testing.T) {
 	}
 }
 func TestGetBestBlock(t *testing.T) {
-	cfg, err := config.LoadConfig("config.yaml")
+	cfg, err := config.LoadConfig("config_btc.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -136,15 +140,16 @@ func TestGetBlock(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Failed to create blockchain client: %v", err)
 	}
-	hash, _ := client.GetBlockHash(575)
-	block1, _ := client.GetBlock(hash)
-	for _, tx := range block1.Tx {
-		fmt.Println("==>tx", tx.Txid)
-		for _, in := range tx.Vin {
-			fmt.Println("   ==in", in.Txid, in.Vout)
-		}
+	hash, _ := client.GetBlockHash(124825)
+	block1, _ := client.GetBlockOnlyTxId(hash)
+	fmt.Println(block1.Height, ",txNUm:", len(block1.Tx))
+	// for _, tx := range block1.Tx {
+	// 	fmt.Println("==>tx", tx.Txid)
+	// 	for _, in := range tx.Vin {
+	// 		fmt.Println("   ==in", in.Txid, in.Vout)
+	// 	}
 
-	}
+	// }
 
 	// fmt.Println("=====================================")
 	// block2, _ := client.GetBlock2(hash)
@@ -223,4 +228,51 @@ func TestGetUtxoDb(t *testing.T) {
 	key := "135db46fc8e8efe42b77c13f5b7ed91b1ce18068bcd84cfd935715bdfef45275"
 	value, err := utxoStore.Get([]byte(key))
 	fmt.Println(string(value), err)
+}
+
+func TestGetNodeData(t *testing.T) {
+	cfg, err := config.LoadConfig("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	client, err := blockchain.NewClient(cfg)
+	if err != nil {
+		log.Fatalf("Failed to create blockchain client: %v", err)
+	}
+	height := int64(121051)
+	hash, _ := client.GetBlockHash(height)
+	block1, _ := client.GetBlock(hash)
+	for _, tx := range block1.Tx {
+		fmt.Println("1==>txID", tx.Txid)
+		fmt.Println("1==>txHash", tx.Hash)
+
+	}
+
+	resp, err := client.Rpc.RawRequest("getblock", []json.RawMessage{
+		json.RawMessage(fmt.Sprintf("\"%s\"", hash.String())),
+		json.RawMessage("0"),
+	})
+	if err != nil {
+		log.Printf("获取区块原始数据失败，高度 %d: %v，3秒后重试...", height, err)
+	}
+	var blockHex string
+	if err := json.Unmarshal(resp, &blockHex); err != nil {
+		log.Println("解析区块原始数据失败，高度，3秒后重试...", height, err)
+
+	}
+	blockBytes, err := hex.DecodeString(blockHex)
+	if err != nil {
+		log.Println("区块hex解码失败，高度", height, err)
+	}
+	msgBlock := &wire.MsgBlock{}
+	if err := msgBlock.Deserialize(bytes.NewReader(blockBytes)); err != nil {
+		log.Println("区块反序列化失败，", height, err)
+	}
+	for _, tx := range msgBlock.Transactions {
+		fmt.Println("2==>txID", tx.TxHash().String())
+		fmt.Println("2==>txHash", tx.TxHash().String())
+		for _, in := range tx.TxIn {
+			fmt.Println("   ==in", in.PreviousOutPoint.Hash.String(), in.PreviousOutPoint.Index)
+		}
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime"
 	"strconv"
 	"sync"
 
@@ -26,6 +27,7 @@ type UTXOIndexer struct {
 }
 
 var workers = 1
+
 var batchSize = 1000
 
 func NewUTXOIndexer(params config.IndexerParams, utxoStore, addressStore *storage.PebbleStore, metaStore *storage.MetaStore, spendStore *storage.PebbleStore) *UTXOIndexer {
@@ -87,8 +89,8 @@ func (i *UTXOIndexer) IndexBlock(block *Block, updateHeight bool) error {
 	}
 
 	// 设置全局工作线程数和批处理大小
-	workers = i.params.WorkerCount
-	batchSize = i.params.BatchSize
+	workers = config.GlobalConfig.Workers
+	batchSize = config.GlobalConfig.BatchSize
 
 	// Validate block
 	if err := block.Validate(); err != nil {
@@ -133,14 +135,15 @@ func (i *UTXOIndexer) IndexBlock(block *Block, updateHeight bool) error {
 
 	// 最后释放区块对象
 	block = nil
-
+	runtime.GC()
 	return nil
 }
 
 func (i *UTXOIndexer) indexIncome(block *Block) error {
 	// 设置合理的批处理大小，根据内存情况调整
 	//const batchSize = 1000
-
+	workers = config.GlobalConfig.Workers
+	batchSize = config.GlobalConfig.BatchSize
 	// 计算需要处理的批次数
 	txCount := len(block.Transactions)
 	batchCount := (txCount + batchSize - 1) / batchSize
@@ -156,21 +159,30 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 		// 为当前批次创建临时map
 		//addressIncomeMap := make(map[string][]string)
 		//txMap := make(map[string][]string)
-		batchSize := end - start
-		addressIncomeMap := make(map[string][]string, batchSize*3) // 假设每个交易平均有2个输出
-		txMap := make(map[string][]string, batchSize)
+		currBatchSize := end - start
+		addressIncomeMap := make(map[string][]string, currBatchSize*3) // 假设每个交易平均有2个输出
+		txMap := make(map[string][]string, currBatchSize)
 
 		// 只处理当前批次的交易
 		for i := start; i < end; i++ {
 			tx := block.Transactions[i]
 			for x, out := range tx.Outputs {
+				//fmt.Println(tx.ID, out.Address, out.Amount)
+				if out.Address == "" {
+					out.Address = "errAddress"
+				}
+				if out.Amount == "" {
+					out.Amount = "0"
+				}
 				txMap[tx.ID] = append(txMap[tx.ID], common.ConcatBytesOptimized([]string{out.Address, out.Amount}, "@"))
 				// 使用预分配的切片减少内存重分配
 				if _, exists := addressIncomeMap[out.Address]; !exists {
 					// 预分配一个合理容量的切片
 					addressIncomeMap[out.Address] = make([]string, 0, 4) // 假设大多数地址有4个以下的输出
 				}
-				addressIncomeMap[out.Address] = append(addressIncomeMap[out.Address], common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x), out.Amount}, "@"))
+				if out.Amount != "errAddress" {
+					addressIncomeMap[out.Address] = append(addressIncomeMap[out.Address], common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x), out.Amount}, "@"))
+				}
 			}
 		}
 
@@ -202,7 +214,8 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 }
 
 func (i *UTXOIndexer) processSpend(block *Block) error {
-	const batchSize = 1000
+	workers = config.GlobalConfig.Workers
+	batchSize = config.GlobalConfig.BatchSize
 
 	// 收集所有交易点
 	var allTxPoints []string

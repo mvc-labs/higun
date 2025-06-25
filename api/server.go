@@ -49,6 +49,7 @@ func (s *Server) SetMempoolManager(mempoolMgr *mempool.MempoolManager, bcClient 
 func (s *Server) setupRoutes() {
 	s.Router.GET("/balance", s.getBalance)
 	s.Router.GET("/utxos", s.getUTXOs)
+	s.Router.GET("/utxos/spend", s.getSpendUTXOs)
 	s.Router.GET("/utxo/db", s.getUtxoByTx)
 	s.Router.GET("/mempool/utxos", s.getMempoolUTXOs)
 
@@ -508,7 +509,25 @@ func (s *Server) getUTXOs(c *gin.Context) {
 		"count":   len(utxos),
 	})
 }
+func (s *Server) getSpendUTXOs(c *gin.Context) {
+	address := c.Query("address")
+	if address == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "address parameter is required"})
+		return
+	}
 
+	utxos, err := s.indexer.GetSpendUTXOs(address)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"address": address,
+		"utxos":   utxos,
+		"count":   len(utxos),
+	})
+}
 func (s *Server) getUtxoByTx(c *gin.Context) {
 	tx := c.Query("tx")
 	if tx == "" {

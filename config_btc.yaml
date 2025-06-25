@@ -1,25 +1,22 @@
 # UTXO Indexer Configuration
-network: "mainnet" # mainnet/testnet/regtest
-data_dir: "/Volumes/MyData/mvc/test"
+network: "regtest" # mainnet/testnet/regtest
+data_dir: "data/regtest"
 shard_count: 2
-tx_concurrency: 64 #多少个并发去节点拿原始交易
-workers: 4
-batch_size: 20000
-cpu_cores: 1 # 4核CPU
+cpu_cores: 2 # 16核CPU
 memory_gb: 4 # 64GB内存
 high_perf: true # 优先性能
 api_port: "8080"
 #zmq_address: "tcp://localhost:28336"  # ZeroMQ连接地址
 #zmq_address: "tcp://192.168.1.30:15555"
-zmq_address: "tcp://8.217.120.15:15555"
+zmq_address: "tcp://47.83.192.160:15555"
 mempool_clean_start_height: 567 # 内存池清理起始高度，避免从创世区块开始清理
-max_tx_per_batch: 30000
+max_tx_per_batch: 1
 
 # Bitcoin RPC Configuration
 rpc:
   chain: "mvc"
   #host: "192.168.1.30"
-  host: "8.217.120.15"
-  port: "9882"
-  user: "showpay"
-  password: "showpay88.."
+  host: "47.83.192.160"
+  port: "8332"
+  user: "dxshow63"
+  password: "sgOEs1pgEao5kL"

@@ -2,6 +2,7 @@ package blockindexer
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,19 +10,25 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/bytedance/sonic"
-	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/metaid/utxo_indexer/blockchain"
+	"github.com/metaid/utxo_indexer/common"
 	"github.com/metaid/utxo_indexer/config"
 )
 
 var (
-	blockInfoDB *pebble.DB
-	blockTxDB   *pebble.DB
-	dbOnce      sync.Once
-	noopLogger  = &customLogger{}
-	client      *blockchain.Client
+	blockInfoDB   *pebble.DB
+	blockTxDB     *pebble.DB
+	dbOnce        sync.Once
+	noopLogger    = &customLogger{}
+	client        *blockchain.Client
+	syncingBlocks int32 // 0: 空闲, 1: 正在同步
+	ChainStats    *blockchain.ChainStatus
+	txCache       *lru.Cache
 )
 
 // 自定义日志记录器 - 不输出任何内容
@@ -61,13 +68,14 @@ type BlockData struct {
 // BlockIndexerInit 初始化 blockInfo 和 blockTx 两个 Pebble 数据库（全局单例）
 func IndexerInit(dataDir string, cfg *config.Config) error {
 	var err error
+	txCache, _ = lru.New(20000) // 缓存2万条交易详情
 	client, err = blockchain.NewClient(cfg)
 
 	dbOptions := &pebble.Options{
 		Logger: noopLogger,
 		Levels: []pebble.LevelOptions{
 			{
-				Compression: func() pebble.Compression { return pebble.NoCompression },
+				Compression: pebble.NoCompression,
 			},
 		},
 		//MemTableSize:                32 << 20, // 降低为32MB (默认64MB)
@@ -83,6 +91,15 @@ func IndexerInit(dataDir string, cfg *config.Config) error {
 		blockTxDB, err = pebble.Open(blockTxPath, dbOptions)
 	})
 	return err
+}
+func SaveBlockInfoData() {
+	for {
+		stats, err := client.GetChainStatus()
+		if err == nil && stats != nil {
+			ChainStats = stats
+		}
+		time.Sleep(1 * time.Minute)
+	}
 }
 
 // DoBlockInfoIndex 每隔10秒获取最新区块高度，和本地txt比较，有新区块则打印并更新txt
@@ -134,11 +151,11 @@ func SyncNewBlocks(fromHeight, toHeight int64, fileName string) {
 			fmt.Printf("\nGetBlockHash(%d) error: %v\n", h, err)
 			break
 		}
-		block, err := client.GetBlock(blockHash)
-		if err != nil {
-			fmt.Printf("\nGetBlock(%d) error: %v\n", block.Height, err)
-			break
-		}
+		// block, err := client.GetBlock(blockHash)
+		// if err != nil {
+		// 	fmt.Printf("\nGetBlock(%d) error: %v\n", block.Height, err)
+		// 	break
+		// }
 		// 进度条
 		progress := float64(h-fromHeight) / float64(total)
 		done := int(progress * float64(barLen))
@@ -166,38 +183,64 @@ func SaveBlockInfo(blockHeight int64, blockHash *chainhash.Hash) (err error) {
 	var infoData BlockData
 	infoData.BaseInfo = result
 	var totalFee float64
-	block, _ := client.GetBlock(blockHash)
-	findCoinBase := false
-	txIdList := make([]string, 0, len(block.Tx))
-	for _, tx := range block.Tx {
-		txIdList = append(txIdList, tx.Txid)
-		if len(tx.Vin) == 0 {
-			break
-		}
-		if !findCoinBase {
-			for _, in := range tx.Vin {
-				if in.IsCoinBase() {
-					tx2, err := client.GetRawTransaction(tx.Txid)
-					if err == nil {
-						infoData.Miner, infoData.Reward = GetMinerAndReward(tx2)
-					}
-					findCoinBase = true
-					break
-				}
-			}
-		}
-		for _, out := range tx.Vout {
-			totalFee += out.Value
-		}
+	block, err := client.GetBlockOnlyTxId(blockHash)
+	if err != nil {
+		return fmt.Errorf("failed to get block transactions: %w", err)
+	}
+	if len(block.Tx) == 0 {
+		// 区块无交易
+		return fmt.Errorf("block %d has no transactions", blockHeight)
+	}
+	// blockLen := len(block.Tx)
+	// if blockLen > 100000 {
+	// 	blockLen = 100000 // 限制最大交易数量，避免过大
+	// }
+	// txIdList := block.Tx[0:blockLen]
+	coinbaseTxid := block.Tx[0] // 第一笔交易txid
+	coinbaseTx, err := client.GetRawTransaction(coinbaseTxid)
+
+	if err == nil && coinbaseTx != nil {
+		infoData.Miner, infoData.Reward = GetMinerAndReward(coinbaseTx)
 	}
 	infoData.TotalFee = totalFee
 	infoData.Size = int(block.Size)
 	key := fmt.Sprintf("%08d", blockHeight)
-	blockValue, err := sonic.Marshal(txIdList)
+	go SaveBlockTxWithFee(blockHeight, key, block.Tx)
+	// blockValue, err := sonic.Marshal(txIdList)
+	// if err != nil {
+	// 	return
+	// }
+	infoValue, err := sonic.Marshal(infoData)
 	if err != nil {
 		return
 	}
-	infoValue, err := sonic.Marshal(infoData)
+	// // 保存区块交易列表到 blockTxDB
+	// if err = blockTxDB.Set([]byte(key), blockValue, nil); err != nil {
+	// 	return fmt.Errorf("failed to save block transactions: %w", err)
+	// }
+	// 保存区块信息到 blockInfoDB
+	if err = blockInfoDB.Set([]byte(key), infoValue, nil); err != nil {
+		return fmt.Errorf("failed to save block info: %w", err)
+	}
+	return
+}
+func SaveBlockTxWithFee(blockHeight int64, key string, txIdList []string) (err error) {
+	if blockHeight <= 126000 {
+		blockValue, err1 := sonic.Marshal(txIdList)
+		if err1 != nil {
+			return
+		}
+		// 保存区块交易列表到 blockTxDB
+		if err1 = blockTxDB.Set([]byte(key), blockValue, nil); err1 != nil {
+			return fmt.Errorf("failed to save block transactions: %w", err)
+		}
+		return nil
+	}
+	txValueList, err := CountBlockTxFee(blockHeight, txIdList, 2, 1000)
+	if err != nil {
+		return
+	}
+	blockValue, err := sonic.Marshal(txValueList)
 	if err != nil {
 		return
 	}
@@ -205,13 +248,97 @@ func SaveBlockInfo(blockHeight int64, blockHash *chainhash.Hash) (err error) {
 	if err = blockTxDB.Set([]byte(key), blockValue, nil); err != nil {
 		return fmt.Errorf("failed to save block transactions: %w", err)
 	}
-	// 保存区块信息到 blockInfoDB
-	if err = blockInfoDB.Set([]byte(key), infoValue, nil); err != nil {
-		return fmt.Errorf("failed to save block info: %w", err)
-	}
-	return
+	return nil
 }
 
+// CountBlockTxFee 统计每个交易的手续费，结果写入 txValueList（格式 "txId:fee"）
+func CountBlockTxFee(blockHeight int64, txids []string, concurrency, batchSize int) ([]string, error) {
+	if len(txids) <= 1 {
+		return nil, nil // 只有 coinbase，无手续费
+	}
+	txValueList := make([]string, len(txids))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	// 跳过 coinbase，coinbase 交易手续费为0
+	txValueList[0] = fmt.Sprintf("%s:0", txids[0])
+
+	for i := 1; i < len(txids); i += batchSize {
+		end := i + batchSize
+		if end > len(txids) {
+			end = len(txids)
+		}
+		batch := txids[i:end]
+		for j, txid := range batch {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(idx int, txid string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				tx, err := GetTxWithCache(txid, txCache)
+				if err != nil || tx == nil {
+					txValueList[idx] = fmt.Sprintf("%s:0", txid)
+					return
+				}
+				// 统计输入总额
+				var inputSum int64
+				for _, vin := range tx.MsgTx().TxIn {
+					// 判断是否为 coinbase 输入
+					if len(vin.SignatureScript) > 0 && vin.PreviousOutPoint.Index == 0xffffffff && vin.PreviousOutPoint.Hash == (chainhash.Hash{}) {
+						continue // 跳过 coinbase 输入
+					}
+					prevTx, err := GetTxWithCache(vin.PreviousOutPoint.Hash.String(), txCache)
+					if err != nil || prevTx == nil {
+						continue
+					}
+					if int(vin.PreviousOutPoint.Index) < len(prevTx.MsgTx().TxOut) {
+						inputSum += prevTx.MsgTx().TxOut[vin.PreviousOutPoint.Index].Value
+					}
+				}
+				// 统计输出总额
+				var outputSum int64
+				for _, vout := range tx.MsgTx().TxOut {
+					outputSum += vout.Value
+				}
+				fee := inputSum - outputSum
+				feeRate := fee / int64(tx.MsgTx().SerializeSize())
+				//txValueList[idx] = fmt.Sprintf("%s:%.8f", txid, fee)
+				txValueList[idx] = common.ConcatBytesOptimized([]string{txid, strconv.FormatInt(fee, 10), strconv.FormatInt(feeRate, 10)}, ":")
+			}(i+j, txid)
+		}
+		log.Println("正在处理区块(", blockHeight, ")交易Fee，当前批次起始索引:", i, "结束索引:", end, "总交易数:", len(txids))
+	}
+	wg.Wait()
+	return txValueList, nil
+}
+
+// GetTxWithCache 查询交易详情，优先查 LRU 缓存
+func GetTxWithCache(txid string, cache *lru.Cache) (*btcutil.Tx, error) {
+	if v, ok := cache.Get(txid); ok {
+		return v.(*btcutil.Tx), nil
+	}
+	tx, err := client.GetRawTransaction(txid)
+	if err != nil {
+		return nil, err
+	}
+	cache.Add(txid, tx)
+	return tx, nil
+}
+func GetMaxBlockHeight() (int64, error) {
+	iter, err := blockInfoDB.NewIter(nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create iterator: %w", err)
+	}
+	defer iter.Close()
+	if iter.Last() {
+		key := string(iter.Key())
+		height, err := strconv.ParseInt(key, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse height failed: %w", err)
+		}
+		return height, nil
+	}
+	return 0, fmt.Errorf("db is empty")
+}
 func GetBlockInfo(blockHeight int64) (*BlockInfo, error) {
 	key := fmt.Sprintf("%08d", blockHeight)
 	value, closer, err := blockInfoDB.Get([]byte(key))
@@ -235,8 +362,8 @@ func GetBlockInfo(blockHeight int64) (*BlockInfo, error) {
 		Version:       int(info.BaseInfo["version"].(float64)),
 		PrevBlockHash: info.BaseInfo["previousblockhash"].(string),
 		MerkleRoot:    info.BaseInfo["merkleroot"].(string),
-		Timestamp:     int64(info.BaseInfo["time"].(float64)),
-		MedianTime:    int64(info.BaseInfo["mediantime"].(float64)),
+		Timestamp:     int64(info.BaseInfo["time"].(float64)) * 1000, // 转换为毫秒
+		MedianTime:    int64(info.BaseInfo["mediantime"].(float64)) * 1000,
 		Reward:        info.Reward,
 		Miner:         info.Miner,
 		MinerAddress:  nil,
@@ -255,12 +382,18 @@ func GetBlockInfoList(lastHeight int64, limit int) ([]*BlockInfo, error) {
 	if limit <= 0 {
 		limit = 10 // 默认返回10个区块信息
 	}
+	if lastHeight <= 0 {
+		lastHeight, _ = GetMaxBlockHeight()
+	}
+	if lastHeight <= 0 {
+		return nil, fmt.Errorf("no blocks indexed yet")
+	}
 	startHeight := lastHeight - int64(limit) + 1
 	if startHeight < 0 {
 		startHeight = 0
 	}
 	blockInfos := make([]*BlockInfo, 0, limit)
-	for h := startHeight; h < lastHeight; h++ {
+	for h := lastHeight; h >= startHeight; h-- {
 		info, err := GetBlockInfo(h)
 		if err != nil {
 			continue
@@ -268,4 +401,48 @@ func GetBlockInfoList(lastHeight int64, limit int) ([]*BlockInfo, error) {
 		blockInfos = append(blockInfos, info)
 	}
 	return blockInfos, nil
+}
+func GetBlockTxList(blockHeight int64, cursor int, size int) ([]string, int64, error) {
+	key := fmt.Sprintf("%08d", blockHeight)
+	value, closer, err := blockTxDB.Get([]byte(key))
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get block transactions: %w", err)
+	}
+	defer closer.Close()
+
+	var txList []string
+	if err = sonic.Unmarshal(value, &txList); err != nil {
+		return nil, 0, fmt.Errorf("failed to unmarshal block transactions: %w", err)
+	}
+	total := len(txList)
+	if cursor < 0 || cursor >= total {
+		return nil, 0, fmt.Errorf("invalid cursor: %d", cursor)
+	}
+	if size <= 0 {
+		size = 10 // 默认返回10个交易
+	}
+	if cursor+size > total {
+		size = total - cursor // 调整大小以避免越界
+	}
+	txList = txList[cursor : cursor+size]
+	info, err := GetBlockInfo(blockHeight) // 确保区块信息已加载
+	if err == nil && info != nil {
+		total = info.TxCount
+	}
+	return txList, int64(total), nil
+}
+func GetBlockAllTxList(blockHeight int64) ([]string, error) {
+	key := fmt.Sprintf("%08d", blockHeight)
+	value, closer, err := blockTxDB.Get([]byte(key))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block transactions: %w", err)
+	}
+	defer closer.Close()
+
+	var txList []string
+	if err = sonic.Unmarshal(value, &txList); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal block transactions: %w", err)
+	}
+
+	return txList, nil
 }

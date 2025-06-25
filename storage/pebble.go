@@ -11,12 +11,12 @@ import (
 	"sync"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble"
 	"github.com/metaid/utxo_indexer/config"
 )
 
 const (
-	defaultShardCount = 16
+	defaultShardCount = 1
 )
 
 var (
@@ -109,14 +109,18 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 	// 	},
 	// }
 	dbOptions := &pebble.Options{
-		Logger: noopLogger,
+		//Logger: noopLogger,
 		Levels: []pebble.LevelOptions{
 			{
-				Compression: func() pebble.Compression { return pebble.NoCompression },
+				Compression: pebble.NoCompression,
 			},
 		},
 		//MemTableSize:                32 << 20, // 降低为32MB (默认64MB)
 		//MemTableStopWritesThreshold: 2,        // 默认4
+		// 限制 block cache 大小（比如 128MB，可根据机器内存调整）
+		Cache: pebble.NewCache(2 << 30), // 128MB
+		// 限制 table cache 数量（比如 64）
+		//MaxOpenFiles: 512,
 	}
 	store := &PebbleStore{
 		shards: make([]*pebble.DB, shardCount),
@@ -345,7 +349,7 @@ func (s *PebbleStore) Delete(key []byte) error {
 }
 func (s *PebbleStore) Set(key, value []byte) error {
 	db := s.getShard(string(key))
-	return db.Set(key, value, pebble.NoSync)
+	return db.Set(key, value, pebble.Sync)
 }
 
 func (s *PebbleStore) Put(key, value []byte) error {
@@ -372,11 +376,11 @@ func (s *PebbleStore) SaveLastHeight(height int) error {
 
 // 恢复到接近原始版本，只修复几个关键问题
 // 修改 BulkMergeMapConcurrent 函数
-func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurrency int) error {
+func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concurrency int) error {
 	if concurrency <= 0 {
 		concurrency = runtime.NumCPU()
 	}
-
+	concurrency = 1
 	type job struct {
 		shardIdx int
 		key      string
@@ -445,7 +449,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 				}
 
 				// 合并写入
-				if err := batch.Merge([]byte(job.key), job.value, pebble.NoSync); err != nil {
+				if err := batch.Merge([]byte(job.key), job.value, pebble.Sync); err != nil {
 					shardMutexes[job.shardIdx].Unlock()
 					select {
 					case errCh <- fmt.Errorf("merge failed on shard %d: %w", job.shardIdx, err):
@@ -457,7 +461,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 				// 检查批处理大小并适时提交
 				batchItemCounters[job.shardIdx]++
 				if batchItemCounters[job.shardIdx] >= maxBatchItems || batch.Len() >= maxBatchSize {
-					if err := batch.Commit(pebble.NoSync); err != nil {
+					if err := batch.Commit(pebble.Sync); err != nil {
 						shardMutexes[job.shardIdx].Unlock()
 						select {
 						case errCh <- fmt.Errorf("commit failed on shard %d: %w", job.shardIdx, err):
@@ -502,7 +506,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 		shardMutexes[i].Lock() // 加锁保护批次提交
 		if batch != nil && batch.Len() > 0 {
 			// 只有最后一个批次使用Sync，其他用NoSync
-			commitOption := pebble.NoSync
+			commitOption := pebble.Sync
 			if i == len(shardBatches)-1 {
 				commitOption = pebble.Sync
 			}
@@ -517,6 +521,77 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 	}
 
 	return nil
+}
+func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurrency int) error {
+	shardCount := len(s.shards)
+	type job struct {
+		key   string
+		value []byte
+	}
+	// 每个 shard 一个 channel
+	shardChans := make([]chan job, shardCount)
+	for i := range shardChans {
+		shardChans[i] = make(chan job, 1024)
+	}
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+
+	// 每个 shard 启动一个 goroutine
+	for shardIdx := range s.shards {
+		wg.Add(1)
+		go func(shardIdx int) {
+			defer wg.Done()
+			db := s.shards[shardIdx]
+			batch := db.NewBatch()
+			defer batch.Close()
+			count := 0
+			for job := range shardChans[shardIdx] {
+				if err := batch.Merge([]byte(job.key), job.value, pebble.Sync); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				count++
+				if count >= 1000 || batch.Len() >= maxBatchSize {
+					if err := batch.Commit(pebble.Sync); err != nil {
+						select {
+						case errCh <- err:
+						default:
+						}
+						return
+					}
+					batch.Reset()
+					count = 0
+				}
+			}
+			if batch.Len() > 0 {
+				_ = batch.Commit(pebble.Sync)
+			}
+		}(shardIdx)
+	}
+
+	// 分发任务到各自的 channel
+	for key, values := range *data {
+		shardIdx := s.getShardIndex(key)
+		valueBytes := []byte("," + strings.Join(values, ","))
+		shardChans[shardIdx] <- job{
+			key:   key,
+			value: valueBytes,
+		}
+	}
+	// 关闭所有 channel
+	for _, ch := range shardChans {
+		close(ch)
+	}
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
 }
 
 // QueryUTXOAddresses 优化版 - 只做必要修改
@@ -539,7 +614,12 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 	resultsCh := make(chan result, len(*outpoints))
 
 	var wg sync.WaitGroup
-
+	// testMap := make(map[string]int)
+	// testMap["66c93ec8bbb2548baba1502d6a7744271ca88e999d2e20e619168dd38898cd02"] = 1 // 特殊地址测试
+	// testMap["1b158e20503c3f10fac31285308fbb44ec8b7a684a95384e6f643c3e654718f8"] = 2
+	// testMap["ac7521d18f7ee7ad887832312088f64e0f4ffefbe6334b237aeb2b38c0bad2be"] = 3
+	// testMap["c6b2309a4cc4b52a995cc10ed7ccc50c9842bb19c26f2824517f73185ee6ca04"] = 4
+	// testMap2 := make(map[string]int)
 	// 启动并发 worker
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
@@ -552,6 +632,10 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 					continue
 				}
 				db := s.getShard(txArr[0])
+				// if _, ok := testMap[txArr[0]]; ok {
+				// 	fmt.Println("发现测试交易:", j.key)
+				// 	testMap2[j.key] = 1
+				// }
 				value, closer, err := db.Get([]byte(txArr[0]))
 				if err != nil {
 					if err == pebble.ErrNotFound {
@@ -564,6 +648,7 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 
 				// 修复1: 立即复制数据并关闭资源，避免defer在循环中积累
 				valueStr := string(append([]byte(nil), value...))
+
 				closer.Close() // 立即关闭而不是延迟
 
 				resultsCh <- result{
@@ -600,10 +685,20 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 		}
 		if r.address != "" {
 			results[r.key], _ = getAddressByStr(r.key, r.address)
+			// if _, ok := testMap2[r.key]; ok {
+			// 	fmt.Println("获取测试交易结果:", r.key, r.address)
+			// }
 		}
+
 	}
 	finalResults := make(map[string][]string)
 	for k, v := range results {
+		// if v == "16Cxq6PZNKa5Gnw5GFrco5jkyrzbNQfHsR" {
+		// 	fmt.Println("发现特殊地址:", v, k)
+		// }
+		if v == "errAddress" {
+			continue
+		}
 		finalResults[v] = append(finalResults[v], k)
 	}
 

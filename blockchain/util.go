@@ -8,6 +8,7 @@ import (
 	"errors"
 	"math"
 
+	bsvwire "github.com/bitcoinsv/bsvd/wire"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
@@ -46,6 +47,19 @@ type RawTransaction struct {
 }
 
 func GetNewHash(msgTx *wire.MsgTx) (newHash string, err error) {
+	buffer := new(bytes.Buffer)
+	err = msgTx.Serialize(buffer)
+	if err != nil {
+		return
+	}
+	transaction, err := DecodeRawTransaction(buffer.Bytes())
+	if err != nil {
+		return
+	}
+	newHash = transaction.TxID
+	return
+}
+func GetNewHash2(msgTx *bsvwire.MsgTx) (newHash string, err error) {
 	buffer := new(bytes.Buffer)
 	err = msgTx.Serialize(buffer)
 	if err != nil {

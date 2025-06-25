@@ -1,13 +1,11 @@
 package indexer
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/metaid/utxo_indexer/common"
-	"github.com/metaid/utxo_indexer/storage"
 )
 
 type Balance struct {
@@ -113,7 +111,6 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 	}
 	return balanceResult, nil
 }
-
 func (i *UTXOIndexer) GetUTXOs(address string) (utxos []UTXO, err error) {
 	// 1. 获取已确认的UTXO
 	addrKey := []byte(address)
@@ -153,14 +150,7 @@ func (i *UTXOIndexer) GetUTXOs(address string) (utxos []UTXO, err error) {
 			incomeMap = nil
 		}
 	}()
-	data, _, err := i.addressStore.GetWithShard(addrKey)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return
-		}
-		return
-	}
-
+	data, _, _ := i.addressStore.GetWithShard(addrKey)
 	// 获取已花费的UTXO
 	spendData, _, err := i.spendStore.GetWithShard(addrKey)
 	if err == nil {
@@ -173,34 +163,51 @@ func (i *UTXOIndexer) GetUTXOs(address string) (utxos []UTXO, err error) {
 	}
 
 	// 处理已确认的UTXO
-	parts := strings.Split(string(data), ",")
-	for _, part := range parts {
-		incomes := strings.Split(part, "@")
-		if len(incomes) < 3 {
-			continue
-		}
-		key := incomes[0] + ":" + incomes[1]
-		if _, exists := incomeMap[key]; exists {
-			continue
-		}
-		incomeMap[key] = struct{}{}
+	if data != nil {
+		parts := strings.Split(string(data), ",")
+		for _, part := range parts {
+			incomes := strings.Split(part, "@")
+			if len(incomes) < 3 {
+				continue
+			}
+			key := incomes[0] + ":" + incomes[1]
+			if _, exists := incomeMap[key]; exists {
+				continue
+			}
+			incomeMap[key] = struct{}{}
 
-		in, err := strconv.ParseInt(incomes[2], 10, 64)
-		if err != nil {
-			continue
+			in, err := strconv.ParseInt(incomes[2], 10, 64)
+			if err != nil {
+				continue
+			}
+			if _, exists := spendMap[key]; exists {
+				continue
+			}
+			if in <= 1000 {
+				continue
+			}
+			utxos = append(utxos, UTXO{
+				TxID:      incomes[0],
+				Index:     incomes[1],
+				Amount:    uint64(in),
+				IsMempool: false,
+			})
 		}
-		if _, exists := spendMap[key]; exists {
-			continue
+	}
+	return utxos, nil
+}
+func (i *UTXOIndexer) GetSpendUTXOs(address string) (utxos []string, err error) {
+	// 1. 获取已确认的UTXO
+	addrKey := []byte(address)
+	// 获取已花费的UTXO
+	spendData, _, err := i.spendStore.GetWithShard(addrKey)
+	if err == nil {
+		for _, spendTx := range strings.Split(string(spendData), ",") {
+			if spendTx == "" {
+				continue
+			}
+			utxos = append(utxos, spendTx)
 		}
-		if in <= 1000 {
-			continue
-		}
-		utxos = append(utxos, UTXO{
-			TxID:      incomes[0],
-			Index:     incomes[1],
-			Amount:    uint64(in),
-			IsMempool: false,
-		})
 	}
 
 	return utxos, nil
