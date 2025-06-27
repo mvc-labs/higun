@@ -159,6 +159,16 @@ func main() {
 		//time.Sleep(3 * time.Second)
 		//continue
 	}
+	lastCleanHeightInt := int64(0)
+	lastCleanHeight, err := metaStore.Get([]byte("last_mempool_clean_height"))
+	if err == nil {
+		log.Printf("从内存池清理高度 %s 恢复", string(lastCleanHeight))
+		lastCleanHeightInt, _ = strconv.ParseInt(string(lastCleanHeight), 10, 64)
+	}
+	if lastCleanHeightInt == 0 {
+		lastCleanHeightInt = int64(bestHeight)
+	}
+	indexer.CleanedHeight = lastCleanHeightInt
 	//	break
 	//}
 
@@ -167,7 +177,7 @@ func main() {
 		lastHeightInt = 0
 		log.Printf("上次高度转换失败，从0开始: %v", err)
 	}
-	lastHeightInt = 121050
+	//lastHeightInt = 121050
 	// Initialize progress bar
 	idx.InitProgressBar(bestHeight, lastHeightInt)
 

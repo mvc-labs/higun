@@ -30,6 +30,7 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 	var mempoolSpend int64
 	var mempoolUtxoCount int64
 	var utxoCount int64
+	mempoolCheckTxMap := make(map[string]int64)
 	defer func() {
 		if spendMap != nil {
 			spendMap = nil
@@ -73,12 +74,13 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 			}
 			income += in
 			utxoCount += 1
+			mempoolCheckTxMap[key] = in
 		}
 	}
 	balance := income - spend
 	// 转换为BTC单位 (1 BTC = 100,000,000 satoshis)
 	btcBalance := float64(balance) / 1e8
-	mempoolIncomeList, mempoolSpendList, err := i.mempoolManager.GetUTXOsByAddress(address)
+	mempoolIncomeList, err := i.mempoolManager.GetUTXOsByAddress(address)
 	if err == nil {
 		for _, utxo := range mempoolIncomeList {
 			in, err := strconv.ParseInt(utxo.Amount, 10, 64)
@@ -86,15 +88,31 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 				continue
 			}
 			mempoolIncome += in
+			mempoolCheckTxMap[utxo.TxID] = in
 		}
-		for _, utxo := range mempoolSpendList {
-			in, err := strconv.ParseInt(utxo.Amount, 10, 64)
-			if err != nil {
-				continue
+		// for _, utxo := range mempoolSpendList {
+		// 	in, err := strconv.ParseInt(utxo.Amount, 10, 64)
+		// 	if err != nil {
+		// 		continue
+		// 	}
+		// 	mempoolSpend += in
+		// }
+		//mempoolUtxoCount = int64(len(mempoolIncomeList) + len(mempoolSpendList))
+	}
+	//检查内存池是否花费
+	if len(mempoolCheckTxMap) > 0 {
+		var list []string
+		for txPoint := range mempoolCheckTxMap {
+			list = append(list, txPoint)
+		}
+		mempoolSpendMap, _ := i.mempoolManager.GetSpendUTXOs(list)
+		for txPoint := range mempoolSpendMap {
+			if _, exists := mempoolCheckTxMap[txPoint]; exists {
+				mempoolSpend += mempoolCheckTxMap[txPoint]
+				mempoolUtxoCount += 1
 			}
-			mempoolSpend += in
 		}
-		mempoolUtxoCount = int64(len(mempoolIncomeList) + len(mempoolSpendList))
+
 	}
 	lastBalance := balance + mempoolIncome - mempoolSpend
 	balanceResult = Balance{
@@ -109,16 +127,22 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 		MempoolSpendBTC:         float64(mempoolSpend) / 1e8,
 		MempoolUTXOCount:        mempoolUtxoCount,
 	}
+	// 清理内存
+	spendMap = nil
+	mempoolCheckTxMap = nil
+
 	return balanceResult, nil
 }
-func (i *UTXOIndexer) GetUTXOs(address string) (utxos []UTXO, err error) {
+func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 	// 1. 获取已确认的UTXO
 	addrKey := []byte(address)
 	spendMap := make(map[string]struct{})
 	incomeMap := make(map[string]struct{})
+	mempoolCheckTxMap := make(map[string]int64)
+	var utxos []UTXO
 	// 2. 获取内存池UTXO
 	if i.mempoolManager != nil {
-		mempoolIncomeList, mempoolSpendList, err := i.mempoolManager.GetUTXOsByAddress(address)
+		mempoolIncomeList, err := i.mempoolManager.GetUTXOsByAddress(address)
 		if err == nil {
 			for _, utxo := range mempoolIncomeList {
 				txArray := strings.Split(utxo.TxID, ":")
@@ -136,10 +160,9 @@ func (i *UTXOIndexer) GetUTXOs(address string) (utxos []UTXO, err error) {
 					IsMempool: true,
 				})
 				incomeMap[utxo.TxID] = struct{}{}
+				mempoolCheckTxMap[utxo.TxID] = amount
 			}
-			for _, utxo := range mempoolSpendList {
-				spendMap[utxo.TxID] = struct{}{}
-			}
+
 		}
 	}
 	defer func() {
@@ -192,9 +215,36 @@ func (i *UTXOIndexer) GetUTXOs(address string) (utxos []UTXO, err error) {
 				Amount:    uint64(in),
 				IsMempool: false,
 			})
+			mempoolCheckTxMap[key] = in
 		}
 	}
-	return utxos, nil
+	// 检查内存池是否花费
+	if len(mempoolCheckTxMap) > 0 {
+		var list []string
+		for txPoint := range mempoolCheckTxMap {
+			list = append(list, txPoint)
+		}
+		mempoolSpendMap, _ := i.mempoolManager.GetSpendUTXOs(list)
+
+		for txPoint := range mempoolSpendMap {
+			if _, exists := mempoolCheckTxMap[txPoint]; exists {
+				spendMap[txPoint] = struct{}{}
+			}
+		}
+
+	}
+	//最后过滤
+	for _, utxo := range utxos {
+		if _, exists := spendMap[utxo.TxID+":"+utxo.Index]; exists {
+			continue // 如果已花费，则跳过
+		}
+		result = append(result, utxo)
+	}
+	// 清理内存
+	mempoolCheckTxMap = nil
+	spendMap = nil
+	incomeMap = nil
+	return result, nil
 }
 func (i *UTXOIndexer) GetSpendUTXOs(address string) (utxos []string, err error) {
 	// 1. 获取已确认的UTXO
@@ -232,7 +282,7 @@ func (i *UTXOIndexer) GetMempoolUTXOs(address string) (mempoolIncomeList []commo
 	}
 
 	// 直接使用接口方法
-	mempoolIncomeList, mempoolSpendList, err = i.mempoolManager.GetUTXOsByAddress(address)
+	mempoolIncomeList, err = i.mempoolManager.GetUTXOsByAddress(address)
 	if err != nil {
 		return nil, nil, fmt.Errorf("获取内存池UTXO失败: %w", err)
 	}

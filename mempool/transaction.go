@@ -134,7 +134,9 @@ func (m *MempoolManager) processOutputs(tx *wire.MsgTx) error {
 		value := strconv.FormatInt(out.Value, 10)
 		// 构建存储key:addr1_tx1:0的方式，value:utxo的金额
 		// 存储UTXO -> 地址的映射到内存池收入数据库
-		err := m.mempoolIncomeDB.AddRecord(utxoID, address, []byte(value))
+		//err := m.mempoolIncomeDB.AddRecord(utxoID, address, []byte(value))
+		key := common.ConcatBytesOptimized([]string{address, utxoID}, "_")
+		err := m.mempoolIncomeDB.AddMempolRecord(key, []byte(value))
 		if err != nil {
 			log.Printf("存储内存池UTXO索引失败 %s -> %s: %v", utxoID, address, err)
 			continue
@@ -165,53 +167,85 @@ func (m *MempoolManager) processInputs(tx *wire.MsgTx) error {
 		prevTxHash := in.PreviousOutPoint.Hash.String()
 		prevOutputIndex := strconv.Itoa(int(in.PreviousOutPoint.Index))
 		spentUtxoID := prevTxHash + ":" + prevOutputIndex
-
-		var utxoAddress string
-		var utxoAmount string
-		//fmt.Println(spentUtxoID)
-		// 直接从主UTXO存储获取数据
-		utxoData, err := m.utxoStore.Get([]byte(prevTxHash))
-		if err == nil {
-			// 处理开头的逗号
-			utxoStr := string(utxoData)
-			//fmt.Println("主库", utxoStr)
-			if len(utxoStr) > 0 && utxoStr[0] == ',' {
-				utxoStr = utxoStr[1:]
-			}
-			parts := strings.Split(utxoStr, ",")
-			if len(parts) > int(in.PreviousOutPoint.Index) {
-				// 解析地址和金额
-				outputInfo := strings.Split(parts[in.PreviousOutPoint.Index], "@")
-				if len(outputInfo) >= 2 {
-					// 获取地址
-					utxoAddress = outputInfo[0]
-					// 获取金额
-					// if amount, err := strconv.ParseUint(outputInfo[1], 10, 64); err == nil {
-					// 	utxoAmount = amount
-					// }
-					utxoAmount = outputInfo[1]
-				}
-			}
-			//fmt.Println("主库", utxoAddress, utxoAmount)
-		} else if err == storage.ErrNotFound {
-			// 主UTXO存储中没找到，尝试从内存池收入数据库查找
-			utxoAddress, utxoAmount, err = m.mempoolIncomeDB.GetByUTXO(spentUtxoID)
-			if err != nil {
-				continue
-			}
-		} else {
-			continue
-		}
+		// var utxoAddress string
+		// var utxoAmount string
+		// //fmt.Println(spentUtxoID)
+		// // 直接从主UTXO存储获取数据
+		// utxoData, err := m.utxoStore.Get([]byte(prevTxHash))
+		// if err == nil {
+		// 	// 处理开头的逗号
+		// 	utxoStr := string(utxoData)
+		// 	//fmt.Println("主库", utxoStr)
+		// 	if len(utxoStr) > 0 && utxoStr[0] == ',' {
+		// 		utxoStr = utxoStr[1:]
+		// 	}
+		// 	parts := strings.Split(utxoStr, ",")
+		// 	if len(parts) > int(in.PreviousOutPoint.Index) {
+		// 		// 解析地址和金额
+		// 		outputInfo := strings.Split(parts[in.PreviousOutPoint.Index], "@")
+		// 		if len(outputInfo) >= 2 {
+		// 			// 获取地址
+		// 			utxoAddress = outputInfo[0]
+		// 			// 获取金额
+		// 			// if amount, err := strconv.ParseUint(outputInfo[1], 10, 64); err == nil {
+		// 			// 	utxoAmount = amount
+		// 			// }
+		// 			utxoAmount = outputInfo[1]
+		// 		}
+		// 	}
+		// 	//fmt.Println("主库", utxoAddress, utxoAmount)
+		// } else if err == storage.ErrNotFound {
+		// 	// 主UTXO存储中没找到，尝试从内存池收入数据库查找
+		// 	utxoAddress, utxoAmount, err = m.mempoolIncomeDB.GetByUTXO(spentUtxoID)
+		// 	if err != nil {
+		// 		// 如果内存池收入数据库也没有找到，从节点获取
+		// 		utxoAddress, utxoAmount, _ = getInfoFromNode(spentUtxoID)
+		// 	}
+		// } else {
+		// 	// 如果内存池收入数据库也没有找到，从节点获取
+		// 	utxoAddress, utxoAmount, _ = getInfoFromNode(spentUtxoID)
+		// }
 		// 记录到内存池支出数据库
 		// 记录到内存池支出数据库，包含金额信息
-		err = m.mempoolSpendDB.AddRecord(spentUtxoID, utxoAddress, []byte(utxoAmount))
+		// if utxoAddress == "" || utxoAmount == "" {
+		// 	log.Printf("无效的UTXO信息，跳过: %s", spentUtxoID)
+		// 	continue
+		// }
+		//err = m.mempoolSpendDB.AddRecord(spentUtxoID, utxoAddress, []byte(utxoAmount))
 		//fmt.Println("存储花费：", spentUtxoID, utxoAddress, utxoAmount, err)
-		if err != nil {
-			continue
-		}
-
+		m.mempoolSpendDB.AddMempolRecord(spentUtxoID, []byte(""))
 	}
 	return nil
+}
+func getInfoFromNode(spentUtxoID string) (string, string, error) {
+	hashArr := strings.Split(spentUtxoID, ":")
+	if len(hashArr) != 2 {
+		return "", "", fmt.Errorf("无效的UTXO ID格式: %s", spentUtxoID)
+	}
+	txHashStr := hashArr[0]
+	outputIndex, err := strconv.Atoi(hashArr[1])
+	if err != nil {
+		return "", "", fmt.Errorf("无效的输出索引: %s", hashArr[1])
+	}
+	// 使用全局RPC客户端获取交易详情
+	txHash, err := chainhash.NewHashFromStr(txHashStr)
+	if err != nil {
+		return "", "", fmt.Errorf("无效的交易哈希: %s", txHashStr)
+	}
+	tx, err := blockchain.RpcClient.GetRawTransaction(txHash)
+	if err != nil {
+		return "", "", fmt.Errorf("获取交易详情失败: %w", err)
+	}
+	// 确保交易有足够的输出
+	if outputIndex < 0 || outputIndex >= len(tx.MsgTx().TxOut) {
+		return "", "", fmt.Errorf("输出索引超出范围: %d", outputIndex)
+	}
+	// 获取输出脚本和金额
+	out := tx.MsgTx().TxOut[outputIndex]
+	address := blockchain.GetAddressFromScript("", out.PkScript, config.GlobalNetwork, config.GlobalConfig.RPC.Chain)
+	// 解析金额
+	amount := strconv.FormatInt(out.Value, 10)
+	return address, amount, nil
 }
 
 // DeserializeTransaction 将字节数组反序列化为交易

@@ -102,6 +102,37 @@ func (s *SimpleDB) GetUtxoByKey(key string) (utxoList []common.Utxo, err error) 
 	}
 	return
 }
+func (s *SimpleDB) AddMempolRecord(key string, value []byte) error {
+	return s.db.Set([]byte(key), value, pebble.Sync)
+}
+func (s *SimpleDB) DeleteMempolRecord(key string) error {
+	return s.db.Delete([]byte(key), pebble.Sync)
+}
+func (s *SimpleDB) BatchDeleteMempolRecord(keys []string) error {
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for _, key := range keys {
+		if err := batch.Delete([]byte(key), pebble.Sync); err != nil {
+			continue
+		}
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return fmt.Errorf("提交批处理失败: %w", err)
+	}
+	return nil
+}
+func (s *SimpleDB) BatchGetMempolRecord(keys []string) (list []string, err error) {
+	for _, key := range keys {
+		_, closer, err := s.db.Get([]byte(key))
+		if err == nil {
+			list = append(list, key)
+		}
+		if closer != nil {
+			closer.Close()
+		}
+	}
+	return
+}
 
 // SetWithIndex
 func (s *SimpleDB) AddRecord(utxoID string, address string, value []byte) error {

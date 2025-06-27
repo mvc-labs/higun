@@ -83,19 +83,19 @@ func (s *Server) StartMempoolCore() error {
 	}()
 
 	// 获取当前索引高度作为清理起始高度
-	lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
-	if err == nil {
-		log.Println("将内存池清理起始高度设置为当前索引高度:", string(lastIndexedHeightBytes))
-		err = s.metaStore.Set([]byte("last_mempool_clean_height"), lastIndexedHeightBytes)
-		if err != nil {
-			log.Printf("设置内存池清理起始高度失败: %v", err)
-		}
-	} else {
-		log.Printf("获取当前索引高度失败: %v", err)
-	}
+	// lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
+	// if err == nil {
+	// 	log.Println("将内存池清理起始高度设置为当前索引高度:", string(lastIndexedHeightBytes))
+	// 	err = s.metaStore.Set([]byte("last_mempool_clean_height"), lastIndexedHeightBytes)
+	// 	if err != nil {
+	// 		log.Printf("设置内存池清理起始高度失败: %v", err)
+	// 	}
+	// } else {
+	// 	log.Printf("获取当前索引高度失败: %v", err)
+	// }
 
 	// 启动内存池清理协程
-	go s.startMempoolCleaner()
+	//go s.startMempoolCleaner()
 
 	return nil
 }

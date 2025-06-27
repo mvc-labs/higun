@@ -35,6 +35,8 @@ type Client struct {
 	params    *chaincfg.Params
 }
 
+var RpcClient *rpcclient.Client
+
 func NewClient(cfg *config.Config) (*Client, error) {
 	connCfg := &rpcclient.ConnConfig{
 		Host:         fmt.Sprintf("%s:%s", cfg.RPC.Host, cfg.RPC.Port),
@@ -53,7 +55,8 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chain params: %w", err)
 	}
-
+	// 设置全局RPC客户端
+	RpcClient = client
 	return &Client{
 		rpcClient: client,
 		cfg:       cfg,
@@ -230,6 +233,7 @@ func (c *Client) SyncBlocks(idx *indexer.UTXOIndexer, checkInterval time.Duratio
 			if err := c.ProcessBlock(idx, height, true); err != nil {
 				return fmt.Errorf("处理区块失败，高度 %d: %w", height, err)
 			}
+
 			fmt.Printf(">>>索引高度 %d 耗时: %.2fs\n", height, time.Since(t0).Seconds())
 		}
 
@@ -488,6 +492,7 @@ func (c *Client) ProcessBlock(idx *indexer.UTXOIndexer, height int, updateHeight
 			runtime.GC() // 强制垃圾回收，避免内存占用过高
 		}
 	}
+	idx.SetMempoolCleanedHeight(int64(height)) // 更新清理高度
 	return nil
 }
 func (c *Client) ProcessBlockBak2(idx *indexer.UTXOIndexer, height int, updateHeight bool) error {

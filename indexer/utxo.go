@@ -29,7 +29,7 @@ type UTXOIndexer struct {
 var workers = 1
 
 var batchSize = 1000
-
+var CleanedHeight int64 // 用于记录清理高度
 func NewUTXOIndexer(params config.IndexerParams, utxoStore, addressStore *storage.PebbleStore, metaStore *storage.MetaStore, spendStore *storage.PebbleStore) *UTXOIndexer {
 	return &UTXOIndexer{
 		params:       params,
@@ -82,7 +82,12 @@ func (i *UTXOIndexer) InitProgressBar(totalBlocks, startHeight int) {
 		//progressbar.OptionSetFormat("%s %s %d/%d (%.2f ops/s)"), // 自定义格式：进度条 + 进度 + 速度
 	)
 }
-
+func (i *UTXOIndexer) SetMempoolCleanedHeight(height int64) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	CleanedHeight = height
+	i.metaStore.Set([]byte("last_mempool_clean_height"), []byte(strconv.FormatInt(height, 10)))
+}
 func (i *UTXOIndexer) IndexBlock(block *Block, updateHeight bool) error {
 	if block == nil {
 		return fmt.Errorf("cannot index nil block")
@@ -147,7 +152,7 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 	// 计算需要处理的批次数
 	txCount := len(block.Transactions)
 	batchCount := (txCount + batchSize - 1) / batchSize
-
+	blockHeight := int64(block.Height)
 	// 分批处理
 	for batchIndex := 0; batchIndex < batchCount; batchIndex++ {
 		start := batchIndex * batchSize
@@ -164,6 +169,7 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 		txMap := make(map[string][]string, currBatchSize)
 
 		// 只处理当前批次的交易
+		var mempoolIncomeKeys []string
 		for i := start; i < end; i++ {
 			tx := block.Transactions[i]
 			for x, out := range tx.Outputs {
@@ -183,6 +189,11 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 				if out.Amount != "errAddress" {
 					addressIncomeMap[out.Address] = append(addressIncomeMap[out.Address], common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x), out.Amount}, "@"))
 				}
+				//是否需要清理内存的收入记录
+				if blockHeight > CleanedHeight {
+					// 如果是大区块的部分批次，记录内存池的收入
+					mempoolIncomeKeys = append(mempoolIncomeKeys, common.ConcatBytesOptimized([]string{out.Address, tx.ID}, "_"))
+				}
 			}
 		}
 
@@ -194,6 +205,14 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 
 		if err := i.addressStore.BulkMergeMapConcurrent(&addressIncomeMap, workers); err != nil {
 			return err
+		}
+		if len(mempoolIncomeKeys) > 0 && i.mempoolManager != nil {
+			log.Printf("Deleting %d mempool income records for block height %d", len(mempoolIncomeKeys), blockHeight)
+			err := i.mempoolManager.BatchDeleteIncom(mempoolIncomeKeys)
+			if err != nil {
+				log.Printf("Failed to delete mempool income records: %v", err)
+			}
+			mempoolIncomeKeys = nil // 清理内存
 		}
 
 		// 立即清理当前批次的内存
@@ -216,7 +235,7 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 func (i *UTXOIndexer) processSpend(block *Block) error {
 	workers = config.GlobalConfig.Workers
 	batchSize = config.GlobalConfig.BatchSize
-
+	blockHeight := int64(block.Height)
 	// 收集所有交易点
 	var allTxPoints []string
 	for _, tx := range block.Transactions {
@@ -251,7 +270,14 @@ func (i *UTXOIndexer) processSpend(block *Block) error {
 		if err := i.spendStore.BulkMergeMapConcurrent(&addressResult, workers); err != nil {
 			return err
 		}
-
+		//是否需要清理内存的支出记录
+		if blockHeight > CleanedHeight {
+			log.Printf("Deleting %d mempool spend records for block height %d", len(batchPoints), blockHeight)
+			err := i.mempoolManager.BatchDeleteSpend(batchPoints)
+			if err != nil {
+				log.Printf("Failed to delete mempool spend records: %v", err)
+			}
+		}
 		// 清理当前批次
 		for k := range addressResult {
 			delete(addressResult, k)

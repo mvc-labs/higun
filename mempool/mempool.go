@@ -26,11 +26,11 @@ type UTXOResult struct {
 }
 
 // getRawUTXOsByAddress 内部方法，获取原始UTXO数据，包括收入和花费的UTXO
-func (m *MempoolManager) getRawUTXOsByAddress(address string) (incomeUtxoList []common.Utxo, spendUtxoList []common.Utxo, err error) {
+func (m *MempoolManager) getRawUTXOsByAddress(address string) (incomeUtxoList []common.Utxo, err error) {
 
 	// 用于去重的map
 	incomeMap := make(map[string]struct{})
-	spentMap := make(map[string]struct{})
+	//spentMap := make(map[string]struct{})
 
 	// 1. 获取收入UTXO
 	incomeList, err := m.mempoolIncomeDB.GetUtxoByKey(address)
@@ -42,21 +42,35 @@ func (m *MempoolManager) getRawUTXOsByAddress(address string) (incomeUtxoList []
 			}
 		}
 	}
-	// 2. 获取已花费的UTXO
-	spendList, err := m.mempoolSpendDB.GetUtxoByKey(address)
-	if err == nil {
-		for _, utxo := range spendList {
-			if _, ok := spentMap[utxo.TxID]; !ok {
-				spendUtxoList = append(spendUtxoList, utxo)
-				spentMap[utxo.TxID] = struct{}{}
-			}
-		}
-	}
+	// // 2. 获取已花费的UTXO
+	// spendList, err := m.mempoolSpendDB.GetUtxoByKey(address)
+	// if err == nil {
+	// 	for _, utxo := range spendList {
+	// 		if _, ok := spentMap[utxo.TxID]; !ok {
+	// 			spendUtxoList = append(spendUtxoList, utxo)
+	// 			spentMap[utxo.TxID] = struct{}{}
+	// 		}
+	// 	}
+	// }
 	return
 }
 
 // GetUTXOsByAddress 获取指定地址的内存池UTXO
-func (m *MempoolManager) GetUTXOsByAddress(address string) (incomeUtxoList []common.Utxo, spendUtxoList []common.Utxo, err error) {
+func (m *MempoolManager) GetUTXOsByAddress(address string) (incomeUtxoList []common.Utxo, err error) {
 	// 获取原始UTXO数据
 	return m.getRawUTXOsByAddress(address)
+}
+func (m *MempoolManager) BatchDeleteIncom(list []string) (err error) {
+	return m.mempoolIncomeDB.BatchDeleteMempolRecord(list)
+}
+func (m *MempoolManager) BatchDeleteSpend(list []string) (err error) {
+	return m.mempoolSpendDB.BatchDeleteMempolRecord(list)
+}
+func (m *MempoolManager) GetSpendUTXOs(txPoints []string) (spendMap map[string]struct{}, err error) {
+	list, _ := m.mempoolSpendDB.BatchGetMempolRecord(txPoints)
+	spendMap = make(map[string]struct{}, len(list))
+	for _, txPoint := range list {
+		spendMap[txPoint] = struct{}{}
+	}
+	return
 }
