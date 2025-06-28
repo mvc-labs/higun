@@ -31,11 +31,6 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 	var mempoolUtxoCount int64
 	var utxoCount int64
 	mempoolCheckTxMap := make(map[string]int64)
-	defer func() {
-		if spendMap != nil {
-			spendMap = nil
-		}
-	}()
 
 	spendData, _, err := i.spendStore.GetWithShard(addrKey)
 	if err == nil {
@@ -48,12 +43,10 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 	}
 
 	// Get with shard info for debugging
+	incomeMap := make(map[string]struct{})
 	data, _, err := i.addressStore.GetWithShard(addrKey)
 	if err == nil {
 		parts := strings.Split(string(data), ",")
-
-		incomeMap := make(map[string]struct{})
-
 		for _, part := range parts {
 			incomes := strings.Split(part, "@")
 			if len(incomes) < 3 {
@@ -87,17 +80,13 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 			if err != nil {
 				continue
 			}
+			//检查内存池的收入是否在已经确认的UTXO中
+			if _, exists := incomeMap[utxo.TxID]; exists {
+				continue // 如果已确认，则跳过
+			}
 			mempoolIncome += in
 			mempoolCheckTxMap[utxo.TxID] = in
 		}
-		// for _, utxo := range mempoolSpendList {
-		// 	in, err := strconv.ParseInt(utxo.Amount, 10, 64)
-		// 	if err != nil {
-		// 		continue
-		// 	}
-		// 	mempoolSpend += in
-		// }
-		//mempoolUtxoCount = int64(len(mempoolIncomeList) + len(mempoolSpendList))
 	}
 	//检查内存池是否花费
 	if len(mempoolCheckTxMap) > 0 {
@@ -112,7 +101,6 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 				mempoolUtxoCount += 1
 			}
 		}
-
 	}
 	lastBalance := balance + mempoolIncome - mempoolSpend
 	balanceResult = Balance{
@@ -130,7 +118,7 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 	// 清理内存
 	spendMap = nil
 	mempoolCheckTxMap = nil
-
+	incomeMap = nil
 	return balanceResult, nil
 }
 func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
@@ -165,14 +153,7 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 
 		}
 	}
-	defer func() {
-		if spendMap != nil {
-			spendMap = nil
-		}
-		if incomeMap != nil {
-			incomeMap = nil
-		}
-	}()
+
 	data, _, _ := i.addressStore.GetWithShard(addrKey)
 	// 获取已花费的UTXO
 	spendData, _, err := i.spendStore.GetWithShard(addrKey)
@@ -184,7 +165,6 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 			spendMap[spendTx] = struct{}{}
 		}
 	}
-
 	// 处理已确认的UTXO
 	if data != nil {
 		parts := strings.Split(string(data), ",")

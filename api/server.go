@@ -52,7 +52,7 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/utxos/spend", s.getSpendUTXOs)
 	s.Router.GET("/utxo/db", s.getUtxoByTx)
 	s.Router.GET("/mempool/utxos", s.getMempoolUTXOs)
-
+	s.Router.GET("/cleanedHeight/get", s.getCleanedHeight)
 	// 添加启动内存池的API
 	s.Router.GET("/mempool/start", s.startMempool)
 	// 内存池重建API
@@ -545,7 +545,16 @@ func (s *Server) getUtxoByTx(c *gin.Context) {
 		"utxos": string(utxos),
 	})
 }
-
+func (s *Server) getCleanedHeight(c *gin.Context) {
+	dbHeight, err := s.metaStore.Get([]byte("last_mempool_clean_height"))
+	if err != nil {
+		dbHeight = []byte("0")
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"CleanedHeight": indexer.CleanedHeight,
+		"dbHeight":      string(dbHeight),
+	})
+}
 func (s *Server) getMempoolUTXOs(c *gin.Context) {
 	address := c.Query("address")
 	if address == "" {

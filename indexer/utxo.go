@@ -192,7 +192,11 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 				//是否需要清理内存的收入记录
 				if blockHeight > CleanedHeight {
 					// 如果是大区块的部分批次，记录内存池的收入
-					mempoolIncomeKeys = append(mempoolIncomeKeys, common.ConcatBytesOptimized([]string{out.Address, tx.ID}, "_"))
+					txPoint := common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x)}, ":")
+					if out.Address == "19egopKjkPDphD9THoj6qbqG13Pf5DcCnj" {
+						log.Printf("Found special address %s in block %d, txpoint %s", out.Address, blockHeight, txPoint)
+					}
+					mempoolIncomeKeys = append(mempoolIncomeKeys, common.ConcatBytesOptimized([]string{out.Address, txPoint}, "_"))
 				}
 			}
 		}
@@ -207,7 +211,7 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 			return err
 		}
 		if len(mempoolIncomeKeys) > 0 && i.mempoolManager != nil {
-			log.Printf("Deleting %d mempool income records for block height %d", len(mempoolIncomeKeys), blockHeight)
+			log.Printf("Deleting %d mempool income records for block height %d,first key:%s", len(mempoolIncomeKeys), blockHeight, mempoolIncomeKeys[0])
 			err := i.mempoolManager.BatchDeleteIncom(mempoolIncomeKeys)
 			if err != nil {
 				log.Printf("Failed to delete mempool income records: %v", err)
@@ -272,7 +276,7 @@ func (i *UTXOIndexer) processSpend(block *Block) error {
 		}
 		//是否需要清理内存的支出记录
 		if blockHeight > CleanedHeight {
-			log.Printf("Deleting %d mempool spend records for block height %d", len(batchPoints), blockHeight)
+			log.Printf("Deleting %d mempool spend records for block height %d,first key:%s", len(batchPoints), blockHeight, batchPoints[0])
 			err := i.mempoolManager.BatchDeleteSpend(batchPoints)
 			if err != nil {
 				log.Printf("Failed to delete mempool spend records: %v", err)
