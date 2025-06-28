@@ -193,9 +193,9 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 				if blockHeight > CleanedHeight {
 					// 如果是大区块的部分批次，记录内存池的收入
 					txPoint := common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x)}, ":")
-					if out.Address == "19egopKjkPDphD9THoj6qbqG13Pf5DcCnj" {
-						log.Printf("Found special address %s in block %d, txpoint %s", out.Address, blockHeight, txPoint)
-					}
+					// if out.Address == "19egopKjkPDphD9THoj6qbqG13Pf5DcCnj" {
+					// 	log.Printf("Found special address %s in block %d, txpoint %s", out.Address, blockHeight, txPoint)
+					// }
 					mempoolIncomeKeys = append(mempoolIncomeKeys, common.ConcatBytesOptimized([]string{out.Address, txPoint}, "_"))
 				}
 			}
