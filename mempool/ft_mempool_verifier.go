@@ -240,6 +240,7 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 		// genesisUtxo, err = m.mempoolManager.mempoolContractFtGenesisStore.GetFtGenesisByKey(usedOutpoint)
 		genesisUtxo, err = m.mempoolManager.mempoolContractFtGenesisStore.GetSimpleRecord(usedOutpoint)
 		if err != nil {
+			fmt.Printf("[MEMPOOL]获取genesisUtxo in mempoolContractFtGenesisStore 失败: %s, %s\n", outpoint, utxoData)
 			return err
 		}
 	}
@@ -247,15 +248,17 @@ func (m *FtMempoolVerifier) verifyUtxo(outpoint, utxoData string) error {
 	if len(genesisUtxo) > 0 {
 		//如果有，就从contractFtGenesisOutputStore里面获取
 		// key:usedOutpoint, value: sensibleId@name@symbol@decimal@codeHash@genesis@amount@txId@index@value,...
-		genesisOutputs, err := m.mempoolManager.contractFtGenesisOutputStore.Get([]byte(usedOutpoint))
-		if err != nil {
-			return err
-		}
+		genesisOutputs, _ := m.mempoolManager.contractFtGenesisOutputStore.Get([]byte(usedOutpoint))
+		// if err != nil {
+		// 	fmt.Printf("[MEMPOOL]获取genesisOutputs in contractFtGenesisOutputStore 失败: %s, %s\n", outpoint, utxoData)
+		// 	return err
+		// }
 		if len(genesisOutputs) == 0 {
 			// genesisOutputs, err = m.mempoolManager.mempoolContractFtGenesisOutputStore.GetFtGenesisOutputsByKey(usedOutpoint)
 			genesisOutputs, err = m.mempoolManager.mempoolContractFtGenesisOutputStore.GetSimpleRecord(usedOutpoint)
 
 			if err != nil {
+				fmt.Printf("[MEMPOOL]获取genesisOutputs in mempoolContractFtGenesisOutputStore 失败: %s, %s\n", outpoint, utxoData)
 				return err
 			}
 		}
