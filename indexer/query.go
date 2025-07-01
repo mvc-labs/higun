@@ -71,7 +71,7 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 		}
 	}
 	balance := income - spend
-	// 转换为BTC单位 (1 BTC = 100,000,000 satoshis)
+	// Convert to BTC unit (1 BTC = 100,000,000 satoshis)
 	btcBalance := float64(balance) / 1e8
 	mempoolIncomeList, err := i.mempoolManager.GetUTXOsByAddress(address)
 	if err == nil {
@@ -80,15 +80,15 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 			if err != nil {
 				continue
 			}
-			//检查内存池的收入是否在已经确认的UTXO中
+			// Check if mempool income is already in confirmed UTXOs
 			if _, exists := incomeMap[utxo.TxID]; exists {
-				continue // 如果已确认，则跳过
+				continue // If confirmed, skip
 			}
 			mempoolIncome += in
 			mempoolCheckTxMap[utxo.TxID] = in
 		}
 	}
-	//检查内存池是否花费
+	// Check if mempool is spent
 	if len(mempoolCheckTxMap) > 0 {
 		var list []string
 		for txPoint := range mempoolCheckTxMap {
@@ -115,20 +115,20 @@ func (i *UTXOIndexer) GetBalance(address string) (balanceResult Balance, err err
 		MempoolSpendBTC:         float64(mempoolSpend) / 1e8,
 		MempoolUTXOCount:        mempoolUtxoCount,
 	}
-	// 清理内存
+	// Clean up memory
 	spendMap = nil
 	mempoolCheckTxMap = nil
 	incomeMap = nil
 	return balanceResult, nil
 }
 func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
-	// 1. 获取已确认的UTXO
+	// 1. Get confirmed UTXOs
 	addrKey := []byte(address)
 	spendMap := make(map[string]struct{})
 	incomeMap := make(map[string]struct{})
 	mempoolCheckTxMap := make(map[string]int64)
 	var utxos []UTXO
-	// 2. 获取内存池UTXO
+	// 2. Get mempool UTXOs
 	if i.mempoolManager != nil {
 		mempoolIncomeList, err := i.mempoolManager.GetUTXOsByAddress(address)
 		if err == nil {
@@ -155,7 +155,7 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 	}
 
 	data, _, _ := i.addressStore.GetWithShard(addrKey)
-	// 获取已花费的UTXO
+	// Get spent UTXOs
 	spendData, _, err := i.spendStore.GetWithShard(addrKey)
 	if err == nil {
 		for _, spendTx := range strings.Split(string(spendData), ",") {
@@ -165,7 +165,7 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 			spendMap[spendTx] = struct{}{}
 		}
 	}
-	// 处理已确认的UTXO
+	// Process confirmed UTXOs
 	if data != nil {
 		parts := strings.Split(string(data), ",")
 		for _, part := range parts {
@@ -198,7 +198,7 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 			mempoolCheckTxMap[key] = in
 		}
 	}
-	// 检查内存池是否花费
+	// Check if mempool is spent
 	if len(mempoolCheckTxMap) > 0 {
 		var list []string
 		for txPoint := range mempoolCheckTxMap {
@@ -213,23 +213,23 @@ func (i *UTXOIndexer) GetUTXOs(address string) (result []UTXO, err error) {
 		}
 
 	}
-	//最后过滤
+	// Final filter
 	for _, utxo := range utxos {
 		if _, exists := spendMap[utxo.TxID+":"+utxo.Index]; exists {
-			continue // 如果已花费，则跳过
+			continue // If spent, skip
 		}
 		result = append(result, utxo)
 	}
-	// 清理内存
+	// Clean up memory
 	mempoolCheckTxMap = nil
 	spendMap = nil
 	incomeMap = nil
 	return result, nil
 }
 func (i *UTXOIndexer) GetSpendUTXOs(address string) (utxos []string, err error) {
-	// 1. 获取已确认的UTXO
+	// 1. Get confirmed UTXOs
 	addrKey := []byte(address)
-	// 获取已花费的UTXO
+	// Get spent UTXOs
 	spendData, _, err := i.spendStore.GetWithShard(addrKey)
 	if err == nil {
 		for _, spendTx := range strings.Split(string(spendData), ",") {
@@ -254,24 +254,24 @@ func (i *UTXOIndexer) GetDbUtxoByTx(tx string) ([]byte, error) {
 	return i.utxoStore.Get([]byte(tx))
 }
 
-// GetMempoolUTXOs 查询地址在内存池中的UTXO
+// GetMempoolUTXOs queries the UTXOs of an address in the mempool
 func (i *UTXOIndexer) GetMempoolUTXOs(address string) (mempoolIncomeList []common.Utxo, mempoolSpendList []common.Utxo, err error) {
-	// 检查是否设置了内存池管理器
+	// Check if mempool manager is set
 	if i.mempoolManager == nil {
-		return nil, nil, fmt.Errorf("内存池管理器未设置")
+		return nil, nil, fmt.Errorf("Mempool manager not set")
 	}
 
-	// 直接使用接口方法
+	// Directly use interface method
 	mempoolIncomeList, err = i.mempoolManager.GetUTXOsByAddress(address)
 	if err != nil {
-		return nil, nil, fmt.Errorf("获取内存池UTXO失败: %w", err)
+		return nil, nil, fmt.Errorf("Failed to get mempool UTXO: %w", err)
 	}
 	return
 }
 
-// GetAddressBalance 获取地址余额
+// GetAddressBalance gets the balance of an address
 func (i *UTXOIndexer) GetAddressBalance(address string) (*Balance, error) {
-	// 直接使用GetBalance方法
+	// Directly use GetBalance method
 	balance, err := i.GetBalance(address)
 	if err != nil {
 		return nil, err

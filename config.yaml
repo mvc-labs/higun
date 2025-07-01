@@ -2,24 +2,21 @@
 network: "mainnet" # mainnet/testnet/regtest
 data_dir: "/Volumes/MyData/mvc/test"
 shard_count: 2
-tx_concurrency: 64 #多少个并发去节点拿原始交易
+tx_concurrency: 64 # How many concurrent requests to fetch raw transactions from nodes
 workers: 4
 batch_size: 20000
-cpu_cores: 1 # 4核CPU
-memory_gb: 4 # 64GB内存
-high_perf: true # 优先性能
+cpu_cores: 1 # 4-core CPU
+memory_gb: 4 # 64GB memory
+high_perf: true # Prefer performance
 api_port: "8080"
-#zmq_address: "tcp://localhost:28336"  # ZeroMQ连接地址
-#zmq_address: "tcp://192.168.1.30:15555"
-zmq_address: "tcp://8.217.120.15:15555"
-mempool_clean_start_height: 567 # 内存池清理起始高度，避免从创世区块开始清理
+zmq_address: "tcp://localhost:28336"  # ZeroMQ connection address
+mempool_clean_start_height: 567 # Mempool cleaning start height, avoid cleaning from the genesis block
 max_tx_per_batch: 30000
 
 # Bitcoin RPC Configuration
 rpc:
   chain: "mvc"
-  #host: "192.168.1.30"
-  host: "8.217.120.15"
+  host: "localhost"
   port: "9882"
-  user: "showpay"
-  password: "showpay88.."
+  user: ""
+  password: ""

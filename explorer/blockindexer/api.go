@@ -32,8 +32,7 @@ func blockInfo(c *gin.Context) {
 		})
 		return
 	}
-	// 尝试将 blockId 解析为整数
-
+	// Try to parse blockId as integer
 	blockHeight, err := ParseBlockHeightOrHash(blockId)
 	if err != nil {
 		c.JSON(400, map[string]interface{}{
@@ -56,7 +55,7 @@ func blockList(c *gin.Context) {
 	var err error
 	lastId := c.Query("last")
 	if lastId != "" {
-		// 尝试将 blockId 解析为整数
+		// Try to parse blockId as integer
 		last, err = strconv.ParseInt(lastId, 10, 64)
 		if err != nil {
 			c.JSON(400, map[string]interface{}{
@@ -65,7 +64,7 @@ func blockList(c *gin.Context) {
 			return
 		}
 	}
-	// 获取区块列表
+	// Get block list
 	blocks, err := GetBlockInfoList(last, 30)
 	if err != nil {
 		c.JSON(500, map[string]interface{}{
@@ -108,7 +107,7 @@ func blockTxList(c *gin.Context) {
 		}
 	}
 	sizeStr := c.Query("size")
-	size := 100 // 默认值
+	size := 100 // default value
 	if sizeStr != "" {
 		size, err = strconv.Atoi(sizeStr)
 		if err != nil || size <= 0 {

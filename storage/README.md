@@ -1,50 +1,50 @@
-# 存储索引查询功能
+# Storage Index Query Functionality
 
-本文档介绍了如何使用存储包中的索引查询功能，特别是针对具有复合键的情况。
+This document describes how to use the index query functionality in the storage package, especially for cases with composite keys.
 
-## 复合键查询
+## Composite Key Query
 
-在本系统中，我们使用了复合键结构 `txid:index_address`，例如 `tx1:0_addr1`。为了能够从不同角度查询数据，我们实现了以下功能：
+In this system, we use a composite key structure `txid:index_address`, for example `tx1:0_addr1`. To enable data queries from different perspectives, we implement the following features:
 
-### 1. 通过 UTXO ID 查询
+### 1. Query by UTXO ID
 
-通过 `txid:index` 部分查询与该 UTXO 关联的所有地址和值：
+Query all addresses and values associated with the UTXO by the `txid:index` part:
 
 ```go
-// 示例: 查询 tx1:0 关联的地址
+// Example: Query addresses associated with tx1:0
 addresses, err := store.GetByUTXO("tx1:0")
 if err != nil {
-    log.Fatalf("查询失败: %v", err)
+    log.Fatalf("Query failed: %v", err)
 }
-fmt.Println("关联的地址:", addresses)
+fmt.Println("Associated addresses:", addresses)
 ```
 
-### 2. 通过地址查询
+### 2. Query by Address
 
-通过 `address` 部分查询与该地址关联的所有 UTXO：
+Query all UTXOs associated with the address by the `address` part:
 
 ```go
-// 示例: 查询 addr1 关联的所有 UTXO
+// Example: Query all UTXOs associated with addr1
 utxos, err := store.GetByAddress("addr1")
 if err != nil {
-    log.Fatalf("查询失败: %v", err)
+    log.Fatalf("Query failed: %v", err)
 }
-fmt.Println("关联的UTXO列表:", utxos)
+fmt.Println("Associated UTXO list:", utxos)
 ```
 
-## 数据操作函数
+## Data Operation Functions
 
-### 1. 添加带索引的记录
+### 1. Add a Record with Index
 
 ```go
-// 添加单条记录并同时更新索引
+// Add a single record and update the index at the same time
 err := store.SetWithIndex("tx1:0", "addr1", []byte("100"))
 ```
 
-### 2. 批量添加带索引的记录
+### 2. Batch Add Records with Index
 
 ```go
-// 批量添加记录
+// Batch add records
 batchRecords := map[string]map[string][]byte{
     "tx4:0": {"addr3": []byte("500")},
     "tx4:1": {"addr3": []byte("600")},
@@ -53,36 +53,36 @@ batchRecords := map[string]map[string][]byte{
 err := store.BatchSetWithIndex(batchRecords)
 ```
 
-### 3. 删除记录并更新索引
+### 3. Delete a Record and Update Index
 
 ```go
-// 删除记录并同时更新索引
+// Delete a record and update the index at the same time
 err := store.DeleteWithIndex("tx1:0", "addr1")
 ```
 
-## 索引实现原理
+## Index Implementation Principle
 
-系统通过维护两种数据结构实现双向查询：
+The system maintains two data structures to achieve bidirectional queries:
 
-1. **主键**: `txid:index_address -> value`
-   - 例如: `tx1:0_addr1 -> 100`
+1. **Primary Key**: `txid:index_address -> value`
+   - Example: `tx1:0_addr1 -> 100`
 
-2. **反向索引**: `addr_index:address -> txid:index1,txid:index2,...`
-   - 例如: `addr_index:addr1 -> tx1:0,tx1:1,tx3:0`
+2. **Reverse Index**: `addr_index:address -> txid:index1,txid:index2,...`
+   - Example: `addr_index:addr1 -> tx1:0,tx1:1,tx3:0`
 
-当添加、修改或删除数据时，系统会自动维护这两种索引的一致性。
+When adding, modifying, or deleting data, the system will automatically maintain the consistency of these two indexes.
 
-## 查询性能
+## Query Performance
 
-- **GetByUTXO**: 使用前缀查询，时间复杂度 O(log N + K)，其中 K 是与该 UTXO 关联的地址数量
-- **GetByAddress**: 使用直接查询，时间复杂度 O(log N)
+- **GetByUTXO**: Uses prefix query, time complexity O(log N + K), where K is the number of addresses associated with the UTXO
+- **GetByAddress**: Uses direct query, time complexity O(log N)
 
-## 示例代码
+## Example Code
 
-完整的示例代码可以参考 `examples.go` 文件，运行示例：
+Complete example code can be found in the `examples.go` file. To run the example:
 
 ```go
-// 运行示例
+// Run example
 import "github.com/metaid/utxo_indexer/storage"
 
 func main() {
@@ -90,9 +90,9 @@ func main() {
 }
 ```
 
-## 测试
+## Testing
 
-运行单元测试来验证功能：
+Run unit tests to verify functionality:
 
 ```bash
 go test -v github.com/metaid/utxo_indexer/storage -run TestIndexedQueries

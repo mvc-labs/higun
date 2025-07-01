@@ -21,7 +21,7 @@ import (
 func TestDefaultMerger(t *testing.T) {
 	opts := &pebble.Options{}
 
-	// 创建一个临时数据库目录
+	// Create a temporary database directory
 	dir := "data/test_merge"
 	db, err := pebble.Open(dir, opts)
 	if err != nil {
@@ -34,17 +34,17 @@ func TestDefaultMerger(t *testing.T) {
 
 	key := []byte("key")
 
-	// 第一次 Merge
+	// First Merge
 	if err := db.Merge(key, []byte("hello"), pebble.Sync); err != nil {
 		t.Fatalf("merge 1 failed: %v", err)
 	}
 
-	// 第二次 Merge
+	// Second Merge
 	if err := db.Merge(key, []byte(",world"), pebble.Sync); err != nil {
 		t.Fatalf("merge 2 failed: %v", err)
 	}
 
-	// 获取最终值
+	// Get the final value
 	value, closer, err := db.Get(key)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
@@ -63,11 +63,11 @@ func TestMerger(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	// 创建自动配置
+	// Create auto configuration
 	params := config.AutoConfigure(config.SystemResources{
-		CPUCores:   cfg.CPUCores, // 16核CPU
-		MemoryGB:   cfg.MemoryGB, // 64GB内存
-		HighPerf:   cfg.HighPerf, // 优先性能
+		CPUCores:   cfg.CPUCores, // 16-core CPU
+		MemoryGB:   cfg.MemoryGB, // 64GB memory
+		HighPerf:   cfg.HighPerf, // Prefer performance
 		ShardCount: cfg.ShardCount,
 	})
 	addressStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeIncome, cfg.ShardCount)
@@ -195,7 +195,7 @@ func TestGetBlock(t *testing.T) {
 	// fmt.Println("size2:", size2)
 }
 
-// reverseHexString 反转16进制字符串的字节顺序
+// reverseHexString reverses the byte order of a hexadecimal string
 func reverseHexString(s string) string {
 	b, err := hex.DecodeString(s)
 	if err != nil {
@@ -213,11 +213,11 @@ func TestGetUtxoDb(t *testing.T) {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	fmt.Println(cfg.RPC.Chain)
-	// 创建自动配置
+	// Create auto configuration
 	params := config.AutoConfigure(config.SystemResources{
-		CPUCores:   cfg.CPUCores, // 16核CPU
-		MemoryGB:   cfg.MemoryGB, // 64GB内存
-		HighPerf:   cfg.HighPerf, // 优先性能
+		CPUCores:   cfg.CPUCores, // 16-core CPU
+		MemoryGB:   cfg.MemoryGB, // 64GB memory
+		HighPerf:   cfg.HighPerf, // Prefer performance
 		ShardCount: cfg.ShardCount,
 	})
 	utxoStore, err := storage.NewPebbleStore(params, cfg.DataDir, storage.StoreTypeUTXO, cfg.ShardCount)
@@ -253,20 +253,20 @@ func TestGetNodeData(t *testing.T) {
 		json.RawMessage("0"),
 	})
 	if err != nil {
-		log.Printf("获取区块原始数据失败，高度 %d: %v，3秒后重试...", height, err)
+		log.Printf("Failed to get raw block data, height %d: %v, retrying in 3 seconds...", height, err)
 	}
 	var blockHex string
 	if err := json.Unmarshal(resp, &blockHex); err != nil {
-		log.Println("解析区块原始数据失败，高度，3秒后重试...", height, err)
+		log.Println("Failed to parse raw block data, height, retrying in 3 seconds...", height, err)
 
 	}
 	blockBytes, err := hex.DecodeString(blockHex)
 	if err != nil {
-		log.Println("区块hex解码失败，高度", height, err)
+		log.Println("Block hex decode failed, height", height, err)
 	}
 	msgBlock := &wire.MsgBlock{}
 	if err := msgBlock.Deserialize(bytes.NewReader(blockBytes)); err != nil {
-		log.Println("区块反序列化失败，", height, err)
+		log.Println("Block deserialization failed,", height, err)
 	}
 	for _, tx := range msgBlock.Transactions {
 		fmt.Println("2==>txID", tx.TxHash().String())

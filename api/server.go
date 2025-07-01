@@ -22,7 +22,7 @@ type Server struct {
 	bcClient    *blockchain.Client
 	metaStore   *storage.MetaStore
 	stopCh      <-chan struct{}
-	mempoolInit bool // 内存池是否已初始化
+	mempoolInit bool // Whether the mempool has been initialized
 }
 
 func NewServer(indexer *indexer.UTXOIndexer, metaStore *storage.MetaStore, stopCh <-chan struct{}) *Server {
@@ -40,7 +40,7 @@ func NewServer(indexer *indexer.UTXOIndexer, metaStore *storage.MetaStore, stopC
 	return server
 }
 
-// 设置内存池管理器和区块链客户端
+// Set the mempool manager and blockchain client
 func (s *Server) SetMempoolManager(mempoolMgr *mempool.MempoolManager, bcClient *blockchain.Client) {
 	s.mempoolMgr = mempoolMgr
 	s.bcClient = bcClient
@@ -53,54 +53,55 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/utxo/db", s.getUtxoByTx)
 	s.Router.GET("/mempool/utxos", s.getMempoolUTXOs)
 	s.Router.GET("/cleanedHeight/get", s.getCleanedHeight)
-	// 添加启动内存池的API
+	// Add API to start the mempool
 	s.Router.GET("/mempool/start", s.startMempool)
-	// 内存池重建API
+	// Mempool rebuild API
 	s.Router.GET("/mempool/rebuild", s.rebuildMempool)
-	// 重新索引区块API
+	// Reindex blocks API
 	s.Router.GET("/blocks/reindex", s.reindexBlocks)
 }
+
 func (s *Server) StartMempoolCore() error {
 	if s.mempoolMgr == nil || s.bcClient == nil {
-		return fmt.Errorf("内存池管理器或区块链客户端未配置")
+		return fmt.Errorf("Mempool manager or blockchain client not configured")
 	}
 	if s.mempoolInit {
-		return nil // 已经启动
+		return nil // Already started
 	}
 
-	log.Println("通过API启动ZMQ和内存池监听...")
+	log.Println("Starting ZMQ and mempool listener via API...")
 	if err := s.mempoolMgr.Start(); err != nil {
-		return fmt.Errorf("内存池启动失败: %w", err)
+		return fmt.Errorf("Failed to start mempool: %w", err)
 	}
 	s.mempoolInit = true
-	log.Println("内存池管理器已通过API启动，监听新交易...")
+	log.Println("Mempool manager started via API, listening for new transactions...")
 
-	// 初始化内存池数据（加载现有内存池交易）
+	// Initialize mempool data (load existing mempool transactions)
 	go func() {
-		log.Println("开始初始化内存池数据...")
+		log.Println("Starting to initialize mempool data...")
 		s.mempoolMgr.InitializeMempool(s.bcClient)
-		log.Println("内存池数据初始化完成")
+		log.Println("Mempool data initialization complete")
 	}()
 
-	// 获取当前索引高度作为清理起始高度
+	// Get current index height as the cleaning start height
 	// lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
 	// if err == nil {
-	// 	log.Println("将内存池清理起始高度设置为当前索引高度:", string(lastIndexedHeightBytes))
+	// 	log.Println("Setting mempool cleaning start height to current index height:", string(lastIndexedHeightBytes))
 	// 	err = s.metaStore.Set([]byte("last_mempool_clean_height"), lastIndexedHeightBytes)
 	// 	if err != nil {
-	// 		log.Printf("设置内存池清理起始高度失败: %v", err)
+	// 		log.Printf("Failed to set mempool cleaning start height: %v", err)
 	// 	}
 	// } else {
-	// 	log.Printf("获取当前索引高度失败: %v", err)
+	// 	log.Printf("Failed to get current index height: %v", err)
 	// }
 
-	// 启动内存池清理协程
+	// Start mempool cleaning goroutine
 	//go s.startMempoolCleaner()
 
 	return nil
 }
 
-// 内存池清理协程
+// Mempool cleaning goroutine
 func (s *Server) startMempoolCleaner() {
 	cleanInterval := 10 * time.Second
 	for {
@@ -119,23 +120,23 @@ func (s *Server) startMempoolCleaner() {
 				lastIndexedHeight, _ = strconv.Atoi(string(lastIndexedHeightBytes))
 			}
 			if lastIndexedHeight > lastCleanHeight {
-				log.Printf("执行内存池清理，从高度 %d 到 %d", lastCleanHeight+1, lastIndexedHeight)
+				log.Printf("Performing mempool cleaning from height %d to %d", lastCleanHeight+1, lastIndexedHeight)
 				for height := lastCleanHeight + 1; height <= lastIndexedHeight; height++ {
 					err := s.mempoolMgr.CleanByHeight(height, s.bcClient)
 					if err != nil {
-						log.Printf("清理高度 %d 失败: %v", height, err)
+						log.Printf("Failed to clean height %d: %v", height, err)
 					}
 				}
 				err := s.metaStore.Set([]byte("last_mempool_clean_height"), []byte(strconv.Itoa(lastIndexedHeight)))
 				if err != nil {
-					log.Printf("更新最后清理高度失败: %v", err)
+					log.Printf("Failed to update last cleaned height: %v", err)
 				}
 			}
 		}
 	}
 }
 
-// 启动内存池API
+// Start mempool API
 func (s *Server) startMempool(c *gin.Context) {
 	err := s.StartMempoolCore()
 	if err != nil {
@@ -147,66 +148,66 @@ func (s *Server) startMempool(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "内存池启动成功",
+		"message": "Mempool started successfully",
 		"status":  "running",
 	})
-	// // 检查内存池管理器是否已配置
+	// // Check if mempool manager is configured
 	// if s.mempoolMgr == nil || s.bcClient == nil {
 	// 	c.JSON(http.StatusInternalServerError, gin.H{
 	// 		"success": false,
-	// 		"error":   "内存池管理器或区块链客户端未配置",
+	// 		"error":   "Mempool manager or blockchain client not configured",
 	// 	})
 	// 	return
 	// }
 
-	// // 检查是否已经初始化
+	// // Check if already initialized
 	// if s.mempoolInit {
 	// 	c.JSON(http.StatusOK, gin.H{
 	// 		"success": true,
-	// 		"message": "内存池已经启动",
+	// 		"message": "Mempool already started",
 	// 		"status":  "running",
 	// 	})
 	// 	return
 	// }
 
-	// // 启动内存池
-	// log.Println("通过API启动ZMQ和内存池监听...")
+	// // Start mempool
+	// log.Println("Starting ZMQ and mempool monitoring via API...")
 	// err := s.mempoolMgr.Start()
 	// if err != nil {
 	// 	c.JSON(http.StatusInternalServerError, gin.H{
 	// 		"success": false,
-	// 		"error":   "内存池启动失败: " + err.Error(),
+	// 		"error":   "Mempool startup failed: " + err.Error(),
 	// 	})
 	// 	return
 	// }
 
-	// // 标记为已初始化
+	// // Mark as initialized
 	// s.mempoolInit = true
-	// log.Println("内存池管理器已通过API启动，监听新交易...")
+	// log.Println("Mempool manager started via API, monitoring new transactions...")
 
-	// // 初始化内存池数据（加载现有内存池交易）
+	// // Initialize mempool data (load existing mempool transactions)
 	// go func() {
-	// 	log.Println("开始初始化内存池数据...")
+	// 	log.Println("Starting mempool data initialization...")
 	// 	s.mempoolMgr.InitializeMempool(s.bcClient)
-	// 	log.Println("内存池数据初始化完成")
+	// 	log.Println("Mempool data initialization completed")
 	// }()
 
-	// // 获取当前索引高度作为清理起始高度
+	// // Get current index height as cleaning start height
 	// lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
 	// if err == nil {
-	// 	// 将当前高度设置为清理起始高度，避免清理历史区块
-	// 	log.Println("将内存池清理起始高度设置为当前索引高度:", string(lastIndexedHeightBytes))
+	// 	// Set current height as cleaning start height to avoid cleaning historical blocks
+	// 	log.Println("Setting mempool cleaning start height to current index height:", string(lastIndexedHeightBytes))
 	// 	err = s.metaStore.Set([]byte("last_mempool_clean_height"), lastIndexedHeightBytes)
 	// 	if err != nil {
-	// 		log.Printf("设置内存池清理起始高度失败: %v", err)
+	// 		log.Printf("Failed to set mempool cleaning start height: %v", err)
 	// 	}
 	// } else {
-	// 	log.Printf("获取当前索引高度失败: %v", err)
+	// 	log.Printf("Failed to get current index height: %v", err)
 	// }
 
-	// // 启动内存池清理协程
+	// // Start mempool cleaning goroutine
 	// go func() {
-	// 	// 内存池清理间隔时间
+	// 	// Mempool cleaning interval
 	// 	cleanInterval := 10 * time.Second
 
 	// 	for {
@@ -214,36 +215,36 @@ func (s *Server) startMempool(c *gin.Context) {
 	// 		case <-s.stopCh:
 	// 			return
 	// 		case <-time.After(cleanInterval):
-	// 			// 1. 获取最后清理的高度
+	// 			// 1. Get last cleaned height
 	// 			lastCleanHeight := 0
 	// 			lastCleanHeightBytes, err := s.metaStore.Get([]byte("last_mempool_clean_height"))
 	// 			if err == nil {
 	// 				lastCleanHeight, _ = strconv.Atoi(string(lastCleanHeightBytes))
 	// 			}
 
-	// 			// 2. 获取最新索引高度
+	// 			// 2. Get latest index height
 	// 			lastIndexedHeight := 0
 	// 			lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
 	// 			if err == nil {
 	// 				lastIndexedHeight, _ = strconv.Atoi(string(lastIndexedHeightBytes))
 	// 			}
 	// 			//lastCleanHeight = lastIndexedHeight - 1
-	// 			// 3. 如果最新索引高度大于最后清理高度，执行清理
+	// 			// 3. If latest index height is greater than last cleaned height, perform cleaning
 	// 			if lastIndexedHeight > lastCleanHeight {
-	// 				log.Printf("执行内存池清理，从高度 %d 到 %d", lastCleanHeight+1, lastIndexedHeight)
+	// 				log.Printf("Performing mempool cleaning from height %d to %d", lastCleanHeight+1, lastIndexedHeight)
 
-	// 				// 对每个新块执行清理
+	// 				// Clean each new block
 	// 				for height := lastCleanHeight + 1; height <= lastIndexedHeight; height++ {
 	// 					err := s.mempoolMgr.CleanByHeight(height, s.bcClient)
 	// 					if err != nil {
-	// 						log.Printf("清理高度 %d 失败: %v", height, err)
+	// 						log.Printf("Failed to clean height %d: %v", height, err)
 	// 					}
 	// 				}
 
-	// 				// 更新最后清理高度
+	// 				// Update last cleaned height
 	// 				err := s.metaStore.Set([]byte("last_mempool_clean_height"), []byte(strconv.Itoa(lastIndexedHeight)))
 	// 				if err != nil {
-	// 					log.Printf("更新最后清理高度失败: %v", err)
+	// 					log.Printf("Failed to update last cleaned height: %v", err)
 	// 				}
 	// 			}
 	// 		}
@@ -252,7 +253,7 @@ func (s *Server) startMempool(c *gin.Context) {
 
 	// c.JSON(http.StatusOK, gin.H{
 	// 	"success": true,
-	// 	"message": "内存池启动成功",
+	// 	"message": "Mempool started successfully",
 	// 	"status":  "running",
 	// })
 }
@@ -260,7 +261,7 @@ func (s *Server) RebuildMempool() error {
 	return s.mempoolMgr.RebuildMempool()
 }
 
-// 重建内存池API
+// Rebuild mempool API
 func (s *Server) rebuildMempool(c *gin.Context) {
 	err := s.RebuildMempool()
 	if err != nil {
@@ -280,128 +281,128 @@ func (s *Server) rebuildMempool(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "内存池启动成功",
+		"message": "Mempool started successfully",
 		"status":  "running",
 	})
-	// 检查内存池管理器是否已配置
+	// Check if mempool manager is configured
 	// 	if s.mempoolMgr == nil || s.bcClient == nil {
 	// 		c.JSON(http.StatusInternalServerError, gin.H{
 	// 			"success": false,
-	// 			"error":   "内存池管理器或区块链客户端未配置",
+	// 			"error":   "Mempool manager or blockchain client not configured",
 	// 		})
 	// 		return
 	// 	}
-	// 	log.Println("开始清理并重建内存池数据...")
-	// 	// 检查内存池是否已启动
+	// 	log.Println("Starting to clean and rebuild mempool data...")
+	// 	// Check if mempool is already started
 	// 	if s.mempoolInit {
-	// 		// 首先停止当前的ZMQ连接（如果有）
+	// 		// First stop current ZMQ connection (if any)
 	// 		s.mempoolMgr.Stop()
-	// 		log.Println("已停止现有ZMQ连接和内存池监听")
+	// 		log.Println("Stopped existing ZMQ connection and mempool monitoring")
 	// 	}
-	// 	// 清除所有内存池数据
+	// 	// Clear all mempool data
 	// 	err := s.mempoolMgr.CleanAllMempool()
 	// 	if err != nil {
-	// 		log.Printf("清理内存池数据出错: %v，尝试重新创建内存池管理器", err)
+	// 		log.Printf("Error cleaning mempool data: %v, attempting to recreate mempool manager", err)
 
-	// 		// 即使清理失败，也继续重新创建内存池管理器
-	// 		// 获取配置
+	// 		// Even if cleaning fails, continue to recreate mempool manager
+	// 		// Get configuration
 	// 		cfg, cfgErr := config.LoadConfig()
 	// 		if cfgErr != nil {
 	// 			c.JSON(http.StatusInternalServerError, gin.H{
 	// 				"success": false,
-	// 				"error":   "加载配置失败: " + cfgErr.Error(),
+	// 				"error":   "Failed to load configuration: " + cfgErr.Error(),
 	// 			})
 	// 			return
 	// 		}
 
-	// 		// 获取链参数
+	// 		// Get chain parameters
 	// 		chainCfg, cfgErr := cfg.GetChainParams()
 	// 		if cfgErr != nil {
 	// 			c.JSON(http.StatusInternalServerError, gin.H{
 	// 				"success": false,
-	// 				"error":   "获取链参数失败: " + cfgErr.Error(),
+	// 				"error":   "Failed to get chain parameters: " + cfgErr.Error(),
 	// 			})
 	// 			return
 	// 		}
 
-	// 		// 重新创建内存池管理器
+	// 		// Recreate mempool manager
 	// 		basePath := s.mempoolMgr.GetBasePath()
 	// 		zmqAddress := s.mempoolMgr.GetZmqAddress()
 
-	// 		// 重新创建内存池管理器
+	// 		// Recreate mempool manager
 	// 		newMempoolMgr := mempool.NewMempoolManager(basePath, s.indexer.GetUtxoStore(), chainCfg, zmqAddress)
 	// 		if newMempoolMgr == nil {
 	// 			c.JSON(http.StatusInternalServerError, gin.H{
 	// 				"success": false,
-	// 				"error":   "重新创建内存池管理器失败",
+	// 				"error":   "Failed to recreate mempool manager",
 	// 			})
 	// 			return
 	// 		}
 
-	// 		// 更新管理器引用
+	// 		// Update manager reference
 	// 		s.mempoolMgr = newMempoolMgr
 	// 		s.indexer.SetMempoolManager(newMempoolMgr)
 	// 	}
 
-	// 	// 获取当前索引高度作为清理起始高度
+	// 	// Get current index height as cleaning start height
 	// 	lastIndexedHeightBytes, err := s.metaStore.Get([]byte("last_indexed_height"))
 	// 	if err == nil {
-	// 		// 将当前高度设置为清理起始高度，避免清理历史区块
-	// 		log.Println("将内存池清理起始高度设置为当前索引高度:", string(lastIndexedHeightBytes))
+	// 		// Set current height as cleaning start height to avoid cleaning historical blocks
+	// 		log.Println("Setting mempool cleaning start height to current index height:", string(lastIndexedHeightBytes))
 	// 		err = s.metaStore.Set([]byte("last_mempool_clean_height"), lastIndexedHeightBytes)
 	// 		if err != nil {
-	// 			log.Printf("设置内存池清理起始高度失败: %v", err)
+	// 			log.Printf("Failed to set mempool cleaning start height: %v", err)
 	// 		}
 	// 	} else {
-	// 		log.Printf("获取当前索引高度失败: %v", err)
+	// 		log.Printf("Failed to get current index height: %v", err)
 	// 	}
 
-	// 	// 重新启动ZMQ连接
-	// 	log.Println("重新启动ZMQ连接...")
+	// 	// Restart ZMQ connection
+	// 	log.Println("Restarting ZMQ connection...")
 	// 	err = s.mempoolMgr.Start()
 	// 	if err != nil {
 	// 		c.JSON(http.StatusInternalServerError, gin.H{
 	// 			"success": false,
-	// 			"error":   "重启ZMQ连接失败: " + err.Error(),
+	// 			"error":   "Failed to restart ZMQ connection: " + err.Error(),
 	// 		})
 	// 		return
 	// 	}
 
-	// 	// 记录重启成功消息
-	// 	log.Println("ZMQ连接重启成功，现在应该能够监听新交易")
+	// 	// Log restart success message
+	// 	log.Println("ZMQ connection restarted successfully, should now be able to monitor new transactions")
 
-	// 	// 开始重新初始化内存池
+	// 	// Start reinitializing mempool
 	// 	go func() {
-	// 		log.Println("开始重新初始化内存池数据...")
+	// 		log.Println("Starting to reinitialize mempool data...")
 	// 		s.mempoolMgr.InitializeMempool(s.bcClient)
-	// 		log.Println("内存池数据重新初始化完成，系统现在应该可以正常处理新交易")
+	// 		log.Println("Mempool data reinitialization completed, system should now be able to handle new transactions normally")
 	// 	}()
 
 	// 	c.JSON(http.StatusOK, gin.H{
 	// 		"success": true,
-	// 		"message": "内存池数据已清理，ZMQ已重新启动，内存池正在重建中",
+	// 		"message": "Mempool data cleaned, ZMQ restarted, mempool rebuilding in progress",
 	// 	})
 }
 
-// reindexBlocks 重新索引指定范围的区块
+// reindexBlocks reindexes blocks in the specified range
 func (s *Server) reindexBlocks(c *gin.Context) {
-	// 检查区块链客户端是否已配置
+	// Check if blockchain client is configured
 	if s.bcClient == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"error":   "区块链客户端未配置",
+			"error":   "Blockchain client not configured",
 		})
 		return
 	}
 
-	// 解析请求参数
+	// Parse request parameters
 	startHeightStr := c.Query("start")
 	endHeightStr := c.Query("end")
 
 	if startHeightStr == "" || endHeightStr == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "start和end参数是必须的",
+			"error":   "start and end parameters are required",
 		})
 		return
 	}
@@ -410,7 +411,7 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "start参数必须是有效的整数",
+			"error":   "start parameter must be a valid integer",
 		})
 		return
 	}
@@ -419,26 +420,26 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "end参数必须是有效的整数",
+			"error":   "end parameter must be a valid integer",
 		})
 		return
 	}
 
-	// 验证高度范围
+	// Validate height range
 	if startHeight < 0 || endHeight < startHeight {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"error":   "无效的高度范围，start必须大于等于0，end必须大于等于start",
+			"error":   "invalid height range, start must be greater than or equal to 0, end must be greater than or equal to start",
 		})
 		return
 	}
 
-	// 检查当前最新区块高度
+	// Check current latest block height
 	currentHeight, err := s.bcClient.GetBlockCount()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"error":   "获取当前区块高度失败: " + err.Error(),
+			"error":   "Failed to get current block height: " + err.Error(),
 		})
 		return
 	}
@@ -447,30 +448,30 @@ func (s *Server) reindexBlocks(c *gin.Context) {
 		endHeight = currentHeight
 	}
 
-	// 立即返回响应，后台开始重新索引
+	// Return response immediately, start reindexing in background
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": fmt.Sprintf("开始重新索引区块，范围从 %d 到 %d", startHeight, endHeight),
+		"message": fmt.Sprintf("Starting to reindex blocks, range from %d to %d", startHeight, endHeight),
 	})
 
-	// 在后台启动重新索引过程
+	// Start reindexing process in background
 	go func() {
-		log.Printf("开始重新索引区块，范围从 %d 到 %d", startHeight, endHeight)
+		log.Printf("Starting to reindex blocks, range from %d to %d", startHeight, endHeight)
 
-		// 设置进度条
+		// Set progress bar
 		blocksToProcess := endHeight - startHeight + 1
 		//s.indexer.InitProgressBar(endHeight, startHeight-1)
 
-		// 处理每个区块
+		// Process each block
 		for height := startHeight; height <= endHeight; height++ {
-			// 使用共用的区块处理函数
+			// Use shared block processing function
 			if err := s.bcClient.ProcessBlock(s.indexer, height, false); err != nil {
-				log.Printf("处理区块失败，高度 %d: %v", height, err)
-				continue // 继续处理下一个区块而不是终止整个重索引过程
+				log.Printf("Failed to process block at height %d: %v", height, err)
+				continue // Continue processing next block instead of terminating entire reindexing process
 			}
 		}
 
-		log.Printf("重新索引完成，处理了 %d 个区块，从高度 %d 到 %d", blocksToProcess, startHeight, endHeight)
+		log.Printf("Reindexing completed, processed %d blocks, from height %d to %d", blocksToProcess, startHeight, endHeight)
 	}()
 }
 

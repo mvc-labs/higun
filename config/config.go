@@ -62,8 +62,8 @@ func LoadConfig(path string) (*Config, error) {
 		ShardCount:              16,
 		APIPort:                 "8080",
 		ZMQAddress:              "tcp://localhost:28332",
-		MemPoolCleanStartHeight: 0,    // 默认从0开始清理
-		MaxTxPerBatch:           3000, // 默认每批次最多处理3000个交易
+		MemPoolCleanStartHeight: 0,    // Default: start cleaning from 0
+		MaxTxPerBatch:           3000, // Default: process up to 3000 transactions per batch
 		RPC: RPCConfig{
 			Host: "localhost",
 			Port: "8332",

@@ -12,32 +12,32 @@ import (
 	"github.com/metaid/utxo_indexer/storage"
 )
 
-// ZMQClient 表示一个ZeroMQ客户端，用于监听比特币节点发送的内存池事件
+// ZMQClient represents a ZeroMQ client for listening to mempool events sent by Bitcoin nodes
 type ZMQClient struct {
-	// ZMQ连接地址，如 "tcp://127.0.0.1:28332"
+	// ZMQ connection address, e.g. "tcp://127.0.0.1:28332"
 	address string
 
-	// 要监听的主题列表，如 "rawtx", "hashtx" 等
+	// List of topics to listen to, e.g. "rawtx", "hashtx", etc.
 	topics []string
 
-	// 上下文控制
+	// Context control
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// 等待所有协程完成
+	// Wait for all goroutines to finish
 	wg sync.WaitGroup
 
-	// 连接和重连间隔
+	// Connection and reconnection interval
 	reconnectInterval time.Duration
 
-	// 处理器映射，每个主题对应一个处理函数
+	// Handler mapping, each topic corresponds to a handler function
 	handlers map[string]MessageHandler
 }
 
-// MessageHandler 是处理ZMQ消息的函数类型
+// MessageHandler is the function type for handling ZMQ messages
 type MessageHandler func(topic string, data []byte) error
 
-// NewZMQClient 创建一个新的ZMQ客户端
+// NewZMQClient creates a new ZMQ client
 func NewZMQClient(address string, _ *storage.SimpleDB) *ZMQClient {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -51,9 +51,9 @@ func NewZMQClient(address string, _ *storage.SimpleDB) *ZMQClient {
 	}
 }
 
-// AddTopic 添加一个要监听的主题及其处理器
+// AddTopic adds a topic to listen to and its handler
 func (c *ZMQClient) AddTopic(topic string, handler MessageHandler) {
-	// 确保主题不重复
+	// Ensure topic is not duplicated
 	for _, t := range c.topics {
 		if t == topic {
 			return
@@ -64,30 +64,30 @@ func (c *ZMQClient) AddTopic(topic string, handler MessageHandler) {
 	c.handlers[topic] = handler
 }
 
-// Start 开始监听ZMQ消息
+// Start starts listening to ZMQ messages
 func (c *ZMQClient) Start() error {
 	if len(c.topics) == 0 {
-		return fmt.Errorf("没有添加任何主题，请先使用AddTopic添加要监听的主题")
+		return fmt.Errorf("No topics added, please use AddTopic to add topics to listen to")
 	}
 
-	log.Printf("开始连接ZMQ服务器: %s", c.address)
-	log.Printf("监听主题: %s", strings.Join(c.topics, ", "))
+	log.Printf("Connecting to ZMQ server: %s", c.address)
+	log.Printf("Listening to topics: %s", strings.Join(c.topics, ", "))
 
-	// 启动监听协程
+	// Start listening goroutine
 	c.wg.Add(1)
 	go c.listen()
 
 	return nil
 }
 
-// Stop 停止监听
+// Stop stops listening
 func (c *ZMQClient) Stop() {
 	c.cancel()
 	c.wg.Wait()
-	log.Println("ZMQ客户端已停止")
+	log.Println("ZMQ client stopped")
 }
 
-// listen 是内部方法，用于监听ZMQ消息
+// listen is an internal method for listening to ZMQ messages
 func (c *ZMQClient) listen() {
 	defer c.wg.Done()
 
@@ -96,77 +96,77 @@ func (c *ZMQClient) listen() {
 		case <-c.ctx.Done():
 			return
 		default:
-			// 创建一个新的socket
+			// Create a new socket
 			socket := zmq4.NewSub(c.ctx)
 			defer socket.Close()
 
-			// 连接到ZMQ服务器
+			// Connect to ZMQ server
 			if err := socket.Dial(c.address); err != nil {
-				log.Printf("连接ZMQ服务器失败: %v, 将在%v后重试",
+				log.Printf("Failed to connect to ZMQ server: %v, will retry in %v",
 					err, c.reconnectInterval)
 				time.Sleep(c.reconnectInterval)
 				continue
 			}
 
-			// 订阅所有主题
+			// Subscribe to all topics
 			for _, topic := range c.topics {
 				if err := socket.SetOption(zmq4.OptionSubscribe, topic); err != nil {
-					log.Printf("订阅主题 %s 失败: %v", topic, err)
+					log.Printf("Failed to subscribe to topic %s: %v", topic, err)
 					continue
 				}
 			}
 
-			log.Printf("成功连接到ZMQ服务器: %s", c.address)
+			log.Printf("Successfully connected to ZMQ server: %s", c.address)
 
-			// 接收消息循环
+			// Receive message loop
 			c.receiveMessages(socket)
 
-			// 如果receiveMessages返回，说明连接断开或出错，重新连接
-			log.Printf("ZMQ连接断开，将在%v后重新连接", c.reconnectInterval)
+			// If receiveMessages returns, the connection is broken or an error occurred, reconnect
+			log.Printf("ZMQ connection lost, will reconnect in %v", c.reconnectInterval)
 			time.Sleep(c.reconnectInterval)
 		}
 	}
 }
 
-// receiveMessages 接收ZMQ消息并处理
+// receiveMessages receives and processes ZMQ messages
 func (c *ZMQClient) receiveMessages(socket zmq4.Socket) {
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
 		default:
-			// 接收消息
+			// Receive message
 			msg, err := socket.Recv()
 			if err != nil {
-				log.Printf("接收消息失败: %v", err)
+				log.Printf("Failed to receive message: %v", err)
 				return
 			}
 
-			// 确保消息至少有两部分：主题和数据
+			// Ensure message has at least two parts: topic and data
 			if len(msg.Frames) < 2 {
-				log.Printf("收到格式不正确的消息: %v", msg)
+				log.Printf("Received message with incorrect format: %v", msg)
 				continue
 			}
 
-			// 第一帧是主题
+			// First frame is topic
 			topic := string(msg.Frames[0])
 
-			// 查找对应的处理器
+			// Find corresponding handler
 			handler, ok := c.handlers[topic]
 			if !ok {
-				log.Printf("收到未知主题的消息: %s", topic)
+				log.Printf("Received message for unknown topic: %s", topic)
 				continue
 			}
 
-			// 调用处理器处理消息
+			// Call handler to process message
 			if err := handler(topic, msg.Frames[1]); err != nil {
-				log.Printf("处理消息失败 [%s]: %v", topic, err)
+				log.Printf("Failed to process message [%s]: %v", topic, err)
 			}
 		}
 	}
 }
 
-// min 返回两个整数中的较小值
+// min returns the smaller of two integers
 func min(a, b int) int {
 	if a < b {
 		return a

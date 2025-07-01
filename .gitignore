@@ -2,3 +2,6 @@ utxo_indexer
 data/
 config_mvc.yaml
 blockinfo_data
+.idea
+config_mvc_ft*
+config_*

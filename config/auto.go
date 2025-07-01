@@ -5,56 +5,56 @@ import (
 	"runtime"
 )
 
-// SystemResources 表示系统可用资源
+// SystemResources represents available system resources
 type SystemResources struct {
-	CPUCores   int  // CPU核心数
-	MemoryGB   int  // 可用内存(GB)
-	HighPerf   bool // 是否优先性能而非内存节约
-	ShardCount int  // 数据库分片数量
+	CPUCores   int  // Number of CPU cores
+	MemoryGB   int  // Available memory (GB)
+	HighPerf   bool // Prefer performance over memory saving
+	ShardCount int  // Number of database shards
 }
 
-// IndexerParams 包含所有索引器和存储参数
+// IndexerParams contains all indexer and storage parameters
 type IndexerParams struct {
-	// 并发控制
-	WorkerCount int // 工作线程数
+	// Concurrency control
+	WorkerCount int // Number of worker threads
 
-	// 内存使用
-	BatchSize      int // 索引批处理大小
-	MaxBatchSizeMB int // 数据库批处理大小(MB)
-	JobBufferSize  int // 任务队列大小
-	BytePoolSizeKB int // 字节池初始大小(KB)
+	// Memory usage
+	BatchSize      int // Index batch processing size
+	MaxBatchSizeMB int // Database batch processing size (MB)
+	JobBufferSize  int // Task queue size
+	BytePoolSizeKB int // Initial byte pool size (KB)
 
-	// 数据库配置 - 每个分片的配置
-	DBCacheSizeMB  int // 每个分片的数据库缓存大小(MB)
-	MemTableSizeMB int // 每个分片的写入内存表大小(MB)
-	WALSizeMB      int // 每个分片的预写日志大小(MB)
+	// Database configuration - per-shard configuration
+	DBCacheSizeMB  int // Database cache size per shard (MB)
+	MemTableSizeMB int // Write memory table size per shard (MB)
+	WALSizeMB      int // Write-ahead log size per shard (MB)
 
-	// 整体配置
-	TotalDBCacheMB     int // 所有分片总数据库缓存(MB)
-	TotalMemoryUsageMB int // 预估总内存使用(MB)
-	MaxTxPerBatch      int // 每个分片最大交易数
+	// Overall configuration
+	TotalDBCacheMB     int // Total database cache for all shards (MB)
+	TotalMemoryUsageMB int // Estimated total memory usage (MB)
+	MaxTxPerBatch      int // Maximum transactions per shard
 }
 
-// AutoConfigure 根据系统资源自动计算最佳配置
+// AutoConfigure automatically calculates optimal configuration based on system resources
 func AutoConfigure(res SystemResources) IndexerParams {
-	// 确保最小值
+	// Ensure minimum values
 	if res.CPUCores <= 0 {
 		res.CPUCores = runtime.NumCPU()
 	}
 	if res.MemoryGB <= 0 {
-		res.MemoryGB = 4 // 默认4GB
+		res.MemoryGB = 4 // Default 4GB
 	}
 	if res.ShardCount <= 0 {
-		res.ShardCount = 16 // 默认分片数
+		res.ShardCount = 16 // Default shard count
 	}
 
-	// 可用内存(MB)
+	// Available memory (MB)
 	memoryMB := res.MemoryGB * 1024
 
-	// 基本配置 - 根据性能模式选择基线
+	// Basic configuration - select baseline based on performance mode
 	var params IndexerParams
 	if res.HighPerf {
-		// 高性能模式 - 使用更多内存
+		// High performance mode - use more memory
 		params = IndexerParams{
 			WorkerCount:    res.CPUCores * 2,
 			BatchSize:      5000,
@@ -63,7 +63,7 @@ func AutoConfigure(res SystemResources) IndexerParams {
 			BytePoolSizeKB: 8,
 		}
 	} else {
-		// 平衡模式 - 节约内存
+		// Balanced mode - save memory
 		params = IndexerParams{
 			WorkerCount:    res.CPUCores,
 			BatchSize:      500,
@@ -73,26 +73,26 @@ func AutoConfigure(res SystemResources) IndexerParams {
 		}
 	}
 
-	// 内存分配比例
-	dbCachePercent := 0.4  // 40%用于DB缓存
-	memTablePercent := 0.1 // 10%用于写内存表
-	walPercent := 0.05     // 5%用于预写日志
+	// Memory allocation ratio
+	dbCachePercent := 0.4  // 40% for DB cache
+	memTablePercent := 0.1 // 10% for write memory table
+	walPercent := 0.05     // 5% for write-ahead log
 
-	// 保留一部分内存给系统和应用其他部分
-	reservedPercent := 0.2 // 20%保留给系统和其他应用
+	// Reserve some memory for system and other applications
+	reservedPercent := 0.2 // 20% reserved for system and other applications
 	availableMemoryMB := int(float64(memoryMB) * (1.0 - reservedPercent))
 
-	// 计算总资源
+	// Calculate total resources
 	totalDBCacheMB := int(float64(availableMemoryMB) * dbCachePercent)
 	totalMemTableMB := int(float64(availableMemoryMB) * memTablePercent)
 	totalWALMB := int(float64(availableMemoryMB) * walPercent)
 
-	// 考虑分片 - 计算每个分片的资源
+	// Consider sharding - calculate resources per shard
 	params.DBCacheSizeMB = totalDBCacheMB / res.ShardCount
 	params.MemTableSizeMB = totalMemTableMB / res.ShardCount
 	params.WALSizeMB = totalWALMB / res.ShardCount
 
-	// 确保每个分片有最小资源
+	// Ensure minimum resources per shard
 	minDBCacheMB := 32
 	minMemTableMB := 8
 	minWALMB := 4
@@ -101,12 +101,12 @@ func AutoConfigure(res SystemResources) IndexerParams {
 	params.MemTableSizeMB = max(params.MemTableSizeMB, minMemTableMB)
 	params.WALSizeMB = max(params.WALSizeMB, minWALMB)
 
-	// 存储总资源信息
+	// Storage total resource info
 	params.TotalDBCacheMB = params.DBCacheSizeMB * res.ShardCount
 
-	// 计算总内存使用估计 - 使用浮点数
-	indexBufferMB := float64(params.BatchSize) * 0.001    // 粗略估计每1000个条目消耗1MB
-	jobBufferMB := float64(params.JobBufferSize) * 0.0001 // 粗略估计每10000个任务消耗1MB
+	// Estimate total memory usage - use floating point
+	indexBufferMB := float64(params.BatchSize) * 0.001    // Roughly estimate 1MB per 1000 items
+	jobBufferMB := float64(params.JobBufferSize) * 0.0001 // Roughly estimate 1MB per 10000 tasks
 
 	params.TotalMemoryUsageMB = params.TotalDBCacheMB +
 		(params.MemTableSizeMB * res.ShardCount) +
@@ -114,21 +114,21 @@ func AutoConfigure(res SystemResources) IndexerParams {
 		int(indexBufferMB) +
 		int(jobBufferMB)
 
-	// 对大内存系统做特殊调整
+	// Special adjustment for large memory systems
 	if res.MemoryGB >= 32 {
 		params.BatchSize *= 2
 		params.MaxBatchSizeMB *= 2
 		params.JobBufferSize *= 2
 	}
 
-	// 确保工作线程和分片数量合理搭配
+	// Ensure reasonable match between worker threads and shard count
 	params.WorkerCount = min(params.WorkerCount, res.ShardCount*4)
-	log.Printf("使用配置: CPU=%d, 内存=%dGB, 分片=%d, 批处理大小=%d, 工作线程=%d",
+	log.Printf("Using configuration: CPU=%d, Memory=%dGB, Shards=%d, BatchSize=%d, Workers=%d",
 		res.CPUCores, res.MemoryGB, res.ShardCount, params.BatchSize, params.WorkerCount)
 	return params
 }
 
-// 辅助函数：取最大值
+// Helper function: get max value
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -136,7 +136,7 @@ func max(a, b int) int {
 	return b
 }
 
-// 辅助函数：取最小值
+// Helper function: get min value
 func min(a, b int) int {
 	if a < b {
 		return a

@@ -2,19 +2,19 @@ package indexer
 
 import "github.com/metaid/utxo_indexer/common"
 
-// UTXOInfo 定义了UTXO的基本信息
+// UTXOInfo defines basic information of UTXO
 type UTXOInfo struct {
 	TxID    string `json:"tx_id"`
 	Index   string `json:"index"`
 	Amount  uint64 `json:"amount"`
-	IsSpent bool   `json:"is_spent"` // 标记是否已花费
+	IsSpent bool   `json:"is_spent"` // Mark whether it has been spent
 }
 
-// MempoolManager 定义了内存池管理器需要实现的接口
+// MempoolManager defines the interface that mempool manager needs to implement
 type MempoolManager interface {
-	// GetUTXOsByAddress 获取指定地址的内存池UTXO
+	// GetUTXOsByAddress gets mempool UTXOs for the specified address
 	GetUTXOsByAddress(address string) (incomeUtxoList []common.Utxo, err error)
-	GetSpendUTXOs(txPoints []string) (spendMap map[string]struct{}, err error) // 获取指定交易点的内存池支出UTXO
-	BatchDeleteIncom(list []string) (err error)                                // 批量删除内存池收入记录
-	BatchDeleteSpend(list []string) (err error)                                // 批量删除内存池支出记录
+	GetSpendUTXOs(txPoints []string) (spendMap map[string]struct{}, err error) // Get mempool spend UTXOs for specified transaction points
+	BatchDeleteIncom(list []string) (err error)                                // Batch delete mempool income records
+	BatchDeleteSpend(list []string) (err error)                                // Batch delete mempool spend records
 }

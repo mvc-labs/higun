@@ -5,10 +5,10 @@ import (
 	"github.com/metaid/utxo_indexer/indexer"
 )
 
-// 确保MempoolManager实现了indexer.MempoolManager接口
+// Ensure MempoolManager implements the indexer.MempoolManager interface
 var _ indexer.MempoolManager = (*MempoolManager)(nil)
 
-// UTXOResult 定义了UTXO查询结果
+// UTXOResult defines UTXO query result
 type UTXOResult struct {
 	Income []struct {
 		TxID   string
@@ -20,19 +20,19 @@ type UTXOResult struct {
 		Index  string
 		Amount uint64
 	}
-	// 添加金额统计
-	TotalIncome uint64 // 总收入（聪）
-	TotalSpent  uint64 // 总花费（聪）
+	// Add amount statistics
+	TotalIncome uint64 // Total income (satoshis)
+	TotalSpent  uint64 // Total spent (satoshis)
 }
 
-// getRawUTXOsByAddress 内部方法，获取原始UTXO数据，包括收入和花费的UTXO
+// getRawUTXOsByAddress internal method, get raw UTXO data, including income and spent UTXOs
 func (m *MempoolManager) getRawUTXOsByAddress(address string) (incomeUtxoList []common.Utxo, err error) {
 
-	// 用于去重的map
+	// Map for deduplication
 	incomeMap := make(map[string]struct{})
 	//spentMap := make(map[string]struct{})
 
-	// 1. 获取收入UTXO
+	// 1. Get income UTXOs
 	incomeList, err := m.mempoolIncomeDB.GetUtxoByKey(address)
 	if err == nil {
 		for _, utxo := range incomeList {
@@ -42,7 +42,7 @@ func (m *MempoolManager) getRawUTXOsByAddress(address string) (incomeUtxoList []
 			}
 		}
 	}
-	// // 2. 获取已花费的UTXO
+	// // 2. Get spent UTXOs
 	// spendList, err := m.mempoolSpendDB.GetUtxoByKey(address)
 	// if err == nil {
 	// 	for _, utxo := range spendList {
@@ -55,9 +55,9 @@ func (m *MempoolManager) getRawUTXOsByAddress(address string) (incomeUtxoList []
 	return
 }
 
-// GetUTXOsByAddress 获取指定地址的内存池UTXO
+// GetUTXOsByAddress gets mempool UTXOs for the specified address
 func (m *MempoolManager) GetUTXOsByAddress(address string) (incomeUtxoList []common.Utxo, err error) {
-	// 获取原始UTXO数据
+	// Get raw UTXO data
 	return m.getRawUTXOsByAddress(address)
 }
 func (m *MempoolManager) BatchDeleteIncom(list []string) (err error) {

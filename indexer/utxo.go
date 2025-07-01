@@ -23,13 +23,13 @@ type UTXOIndexer struct {
 	mu             sync.RWMutex
 	bar            *progressbar.ProgressBar
 	params         config.IndexerParams
-	mempoolManager MempoolManager // 使用接口类型替代interface{}
+	mempoolManager MempoolManager // Use interface type instead of interface{}
 }
 
 var workers = 1
 
 var batchSize = 1000
-var CleanedHeight int64 // 用于记录清理高度
+var CleanedHeight int64 // Used to record cleanup height
 func NewUTXOIndexer(params config.IndexerParams, utxoStore, addressStore *storage.PebbleStore, metaStore *storage.MetaStore, spendStore *storage.PebbleStore) *UTXOIndexer {
 	return &UTXOIndexer{
 		params:       params,
@@ -41,16 +41,16 @@ func NewUTXOIndexer(params config.IndexerParams, utxoStore, addressStore *storag
 }
 
 // func (i *UTXOIndexer) optimizeConcurrency(dataSize int) int {
-// 	// 根据数据大小和系统资源动态调整并发数
-// 	// 小数据量用较少协程，大数据量时限制最大并发数
+// 	// Dynamically adjust concurrency based on data size and system resources
+// 	// Use fewer goroutines for small data, limit max concurrency for large data
 // 	optimalWorkers := i.workers
 
 // 	if dataSize < 1000 {
-// 		// 小数据量使用更少的协程
+// 		// Use fewer goroutines for small data
 // 		optimalWorkers = min(i.workers, 2)
 // 	} else if dataSize > 10000 {
-// 		// 大数据量限制最大协程数
-// 		maxWorkers := runtime.NumCPU() * 2 // 或设置一个固定上限
+// 		// Limit max goroutines for large data
+// 		maxWorkers := runtime.NumCPU() * 2 // Or set a fixed upper limit
 // 		optimalWorkers = min(i.workers, maxWorkers)
 // 	}
 
@@ -59,7 +59,7 @@ func NewUTXOIndexer(params config.IndexerParams, utxoStore, addressStore *storag
 func (i *UTXOIndexer) InitProgressBar(totalBlocks, startHeight int) {
 	remainingBlocks := totalBlocks - startHeight
 	if remainingBlocks <= 0 {
-		remainingBlocks = 1 // 至少设置为1以避免错误
+		remainingBlocks = 1 // Set to at least 1 to avoid errors
 	}
 	i.bar = progressbar.NewOptions(remainingBlocks,
 		progressbar.OptionSetWriter(colorable.NewColorableStdout()),
@@ -73,13 +73,13 @@ func (i *UTXOIndexer) InitProgressBar(totalBlocks, startHeight int) {
 			BarStart:      "[",
 			BarEnd:        "]",
 		}),
-		progressbar.OptionSetRenderBlankState(false), // 不显示空白状态
-		progressbar.OptionShowCount(),                // 显示计数 (e.g., 1/3)
-		progressbar.OptionShowIts(),                  // 显示迭代次数
+		progressbar.OptionSetRenderBlankState(false), // Don't show blank state
+		progressbar.OptionShowCount(),                // Show count (e.g., 1/3)
+		progressbar.OptionShowIts(),                  // Show iterations
 		progressbar.OptionOnCompletion(func() {
 			fmt.Fprint(colorable.NewColorableStdout(), "\nDone!\n")
 		}),
-		//progressbar.OptionSetFormat("%s %s %d/%d (%.2f ops/s)"), // 自定义格式：进度条 + 进度 + 速度
+		//progressbar.OptionSetFormat("%s %s %d/%d (%.2f ops/s)"), // Custom format: progress bar + progress + speed
 	)
 }
 func (i *UTXOIndexer) SetMempoolCleanedHeight(height int64) {
@@ -93,7 +93,7 @@ func (i *UTXOIndexer) IndexBlock(block *Block, updateHeight bool) error {
 		return fmt.Errorf("cannot index nil block")
 	}
 
-	// 设置全局工作线程数和批处理大小
+	// Set global worker count and batch size
 	workers = config.GlobalConfig.Workers
 	batchSize = config.GlobalConfig.BatchSize
 
@@ -102,26 +102,26 @@ func (i *UTXOIndexer) IndexBlock(block *Block, updateHeight bool) error {
 		return fmt.Errorf("invalid block: %w", err)
 	}
 
-	// 由于在convertBlock阶段已分批处理，此处不再需要复杂的大区块处理逻辑
-	// 直接处理当前批次的交易
+	// Since batch processing is already done in the convertBlock stage, complex large block processing logic is no longer needed here
+	// Directly process transactions in the current batch
 
 	// Phase 1: Index all outputs
 	if err := i.indexIncome(block); err != nil {
 		return fmt.Errorf("failed to index outputs: %w", err)
 	}
-	// 第1阶段完成后即可释放部分内存
+	// After phase 1 is complete, some memory can be released
 	block.AddressIncome = nil
 
 	// Phase 2: Process all inputs
 	if err := i.processSpend(block); err != nil {
 		return fmt.Errorf("failed to process inputs: %w", err)
 	}
-	// 第2阶段完成后释放交易数据
+	// After phase 2 is complete, release transaction data
 	block.Transactions = nil
 
-	// 如果是大区块的部分批次，不更新索引高度，等待最后一个批次
+	// If it's a partial batch of a large block, don't update the index height, wait for the last batch
 	if !block.IsPartialBlock && updateHeight {
-		// 只有在处理完整个区块的最后一批次时才保存高度
+		// Only save height when processing the last batch of the entire block
 		heightStr := strconv.Itoa(block.Height)
 		if err := i.metaStore.Set([]byte("last_indexed_height"), []byte(heightStr)); err != nil {
 			return err
@@ -132,28 +132,28 @@ func (i *UTXOIndexer) IndexBlock(block *Block, updateHeight bool) error {
 			return err
 		}
 
-		// 更新进度条
+		// Update progress bar
 		if i.bar != nil {
 			i.bar.Add(1)
 		}
 	}
 
-	// 最后释放区块对象
+	// Finally release the block object
 	block = nil
 	runtime.GC()
 	return nil
 }
 
 func (i *UTXOIndexer) indexIncome(block *Block) error {
-	// 设置合理的批处理大小，根据内存情况调整
+	// Set reasonable batch size based on memory conditions
 	//const batchSize = 1000
 	workers = config.GlobalConfig.Workers
 	batchSize = config.GlobalConfig.BatchSize
-	// 计算需要处理的批次数
+	// Calculate the number of batches to process
 	txCount := len(block.Transactions)
 	batchCount := (txCount + batchSize - 1) / batchSize
 	blockHeight := int64(block.Height)
-	// 分批处理
+	// Process in batches
 	for batchIndex := 0; batchIndex < batchCount; batchIndex++ {
 		start := batchIndex * batchSize
 		end := start + batchSize
@@ -161,14 +161,14 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 			end = txCount
 		}
 
-		// 为当前批次创建临时map
+		// Create temporary maps for current batch
 		//addressIncomeMap := make(map[string][]string)
 		//txMap := make(map[string][]string)
 		currBatchSize := end - start
-		addressIncomeMap := make(map[string][]string, currBatchSize*3) // 假设每个交易平均有2个输出
+		addressIncomeMap := make(map[string][]string, currBatchSize*3) // Assume each transaction has an average of 2 outputs
 		txMap := make(map[string][]string, currBatchSize)
 
-		// 只处理当前批次的交易
+		// Only process transactions in current batch
 		var mempoolIncomeKeys []string
 		for i := start; i < end; i++ {
 			tx := block.Transactions[i]
@@ -181,17 +181,17 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 					out.Amount = "0"
 				}
 				txMap[tx.ID] = append(txMap[tx.ID], common.ConcatBytesOptimized([]string{out.Address, out.Amount}, "@"))
-				// 使用预分配的切片减少内存重分配
+				// Use pre-allocated slices to reduce memory reallocation
 				if _, exists := addressIncomeMap[out.Address]; !exists {
-					// 预分配一个合理容量的切片
-					addressIncomeMap[out.Address] = make([]string, 0, 4) // 假设大多数地址有4个以下的输出
+					// Pre-allocate a slice with reasonable capacity
+					addressIncomeMap[out.Address] = make([]string, 0, 4) // Assume most addresses have less than 4 outputs
 				}
 				if out.Amount != "errAddress" {
 					addressIncomeMap[out.Address] = append(addressIncomeMap[out.Address], common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x), out.Amount}, "@"))
 				}
-				//是否需要清理内存的收入记录
+				// Whether to clean up mempool income records
 				if blockHeight > CleanedHeight {
-					// 如果是大区块的部分批次，记录内存池的收入
+					// If it's a partial batch of a large block, record mempool income
 					txPoint := common.ConcatBytesOptimized([]string{tx.ID, strconv.Itoa(x)}, ":")
 					// if out.Address == "19egopKjkPDphD9THoj6qbqG13Pf5DcCnj" {
 					// 	log.Printf("Found special address %s in block %d, txpoint %s", out.Address, blockHeight, txPoint)
@@ -201,7 +201,7 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 			}
 		}
 
-		// 处理当前批次
+		// Process current batch
 		//workers := 1
 		if err := i.utxoStore.BulkMergeMapConcurrent(&txMap, workers); err != nil {
 			return err
@@ -216,10 +216,10 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 			if err != nil {
 				log.Printf("Failed to delete mempool income records: %v", err)
 			}
-			mempoolIncomeKeys = nil // 清理内存
+			mempoolIncomeKeys = nil // Clean up memory
 		}
 
-		// 立即清理当前批次的内存
+		// Immediately clean up memory for current batch
 		for k := range txMap {
 			delete(txMap, k)
 		}
@@ -229,7 +229,7 @@ func (i *UTXOIndexer) indexIncome(block *Block) error {
 		txMap = nil
 		addressIncomeMap = nil
 
-		// 可选：强制垃圾回收
+		// Optional: Force garbage collection
 		// runtime.GC()
 	}
 
@@ -240,7 +240,7 @@ func (i *UTXOIndexer) processSpend(block *Block) error {
 	workers = config.GlobalConfig.Workers
 	batchSize = config.GlobalConfig.BatchSize
 	blockHeight := int64(block.Height)
-	// 收集所有交易点
+	// Collect all transaction points
 	var allTxPoints []string
 	for _, tx := range block.Transactions {
 		for _, in := range tx.Inputs {
@@ -248,11 +248,11 @@ func (i *UTXOIndexer) processSpend(block *Block) error {
 		}
 	}
 
-	// 计算批次
+	// Calculate batches
 	totalPoints := len(allTxPoints)
 	batchCount := (totalPoints + batchSize - 1) / batchSize
 
-	// 分批处理
+	// Process in batches
 	for batchIndex := 0; batchIndex < batchCount; batchIndex++ {
 		start := batchIndex * batchSize
 		end := start + batchSize
@@ -260,21 +260,21 @@ func (i *UTXOIndexer) processSpend(block *Block) error {
 			end = totalPoints
 		}
 
-		// 当前批次的交易点
+		// Transaction points for current batch
 		batchPoints := allTxPoints[start:end]
 
-		// 查询当前批次
+		// Query current batch
 		addressResult, err := i.utxoStore.QueryUTXOAddresses(&batchPoints, workers)
 		if err != nil {
 			return err
 		}
 
-		// 处理当前批次的结果
+		// Process results for current batch
 		//workers := 1
 		if err := i.spendStore.BulkMergeMapConcurrent(&addressResult, workers); err != nil {
 			return err
 		}
-		//是否需要清理内存的支出记录
+		// Whether to clean up mempool spend records
 		if blockHeight > CleanedHeight {
 			log.Printf("Deleting %d mempool spend records for block height %d,first key:%s", len(batchPoints), blockHeight, batchPoints[0])
 			err := i.mempoolManager.BatchDeleteSpend(batchPoints)
@@ -282,17 +282,17 @@ func (i *UTXOIndexer) processSpend(block *Block) error {
 				log.Printf("Failed to delete mempool spend records: %v", err)
 			}
 		}
-		// 清理当前批次
+		// Clean up current batch
 		for k := range addressResult {
 			delete(addressResult, k)
 		}
 		addressResult = nil
 
-		// 此批次处理完毕，释放内存
+		// This batch is complete, release memory
 		batchPoints = nil
 	}
 
-	// 清理全部交易点
+	// Clean up all transaction points
 	allTxPoints = nil
 
 	return nil
@@ -324,7 +324,7 @@ type Block struct {
 	Height         int                  `json:"height"`
 	Transactions   []*Transaction       `json:"transactions"`
 	AddressIncome  map[string][]*Income `json:"address_income"`
-	IsPartialBlock bool                 `json:"-"` // 标记是否为分批处理的部分区块
+	IsPartialBlock bool                 `json:"-"` // Mark whether it is a partial block for batch processing
 }
 
 func (b *Block) Validate() error {
@@ -353,12 +353,12 @@ type Output struct {
 	Amount  string
 }
 
-// SetMempoolManager 设置内存池管理器
+// SetMempoolManager sets the mempool manager
 func (i *UTXOIndexer) SetMempoolManager(mgr MempoolManager) {
 	i.mempoolManager = mgr
 }
 
-// GetUtxoStore 返回UTXO存储对象
+// GetUtxoStore returns the UTXO storage object
 func (i *UTXOIndexer) GetUtxoStore() *storage.PebbleStore {
 	return i.utxoStore
 }

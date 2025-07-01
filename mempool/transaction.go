@@ -19,27 +19,27 @@ import (
 	"github.com/metaid/utxo_indexer/storage"
 )
 
-// MempoolManager 管理内存池交易
+// MempoolManager manages mempool transactions
 type MempoolManager struct {
-	utxoStore       *storage.PebbleStore // 主UTXO存储，使用分片
-	mempoolIncomeDB *storage.SimpleDB    // 内存池收入数据库
-	mempoolSpendDB  *storage.SimpleDB    // 内存池支出数据库
+	utxoStore       *storage.PebbleStore // Main UTXO storage, using sharding
+	mempoolIncomeDB *storage.SimpleDB    // Mempool income database
+	mempoolSpendDB  *storage.SimpleDB    // Mempool spend database
 	chainCfg        *chaincfg.Params
 	zmqClient       *ZMQClient
-	basePath        string // 数据目录基础路径
+	basePath        string // Data directory base path
 }
 
-// NewMempoolManager 创建一个新的内存池管理器
+// NewMempoolManager creates a new mempool manager
 func NewMempoolManager(basePath string, utxoStore *storage.PebbleStore, chainCfg *chaincfg.Params, zmqAddress string) *MempoolManager {
 	mempoolIncomeDB, err := storage.NewSimpleDB(basePath + "/mempool_income")
 	if err != nil {
-		log.Printf("创建内存池收入数据库失败: %v", err)
+		log.Printf("Failed to create mempool income database: %v", err)
 		return nil
 	}
 
 	mempoolSpendDB, err := storage.NewSimpleDB(basePath + "/mempool_spend")
 	if err != nil {
-		log.Printf("创建内存池支出数据库失败: %v", err)
+		log.Printf("Failed to create mempool spend database: %v", err)
 		mempoolIncomeDB.Close()
 		return nil
 	}
@@ -52,21 +52,21 @@ func NewMempoolManager(basePath string, utxoStore *storage.PebbleStore, chainCfg
 		basePath:        basePath,
 	}
 
-	// 创建ZMQ客户端，不再传递db
+	// Create ZMQ client, no longer passing db
 	m.zmqClient = NewZMQClient(zmqAddress, nil)
 
-	// 添加"rawtx"主题监听
+	// Add "rawtx" topic monitoring
 	m.zmqClient.AddTopic("rawtx", m.HandleRawTransaction)
 
 	return m
 }
 
-// Start 启动内存池管理器
+// Start starts the mempool manager
 func (m *MempoolManager) Start() error {
 	return m.zmqClient.Start()
 }
 
-// Stop 停止内存池管理器
+// Stop stops the mempool manager
 func (m *MempoolManager) Stop() {
 	m.zmqClient.Stop()
 	if m.mempoolIncomeDB != nil {
@@ -77,34 +77,34 @@ func (m *MempoolManager) Stop() {
 	}
 }
 
-// HandleRawTransaction 处理原始交易数据
+// HandleRawTransaction processes raw transaction data
 func (m *MempoolManager) HandleRawTransaction(topic string, data []byte) error {
-	// 1. 解析原始交易
+	// 1. Parse raw transaction
 	tx, err := DeserializeTransaction(data)
 	if err != nil {
-		return fmt.Errorf("解析交易失败: %w", err)
+		return fmt.Errorf("Failed to parse transaction: %w", err)
 	}
 
-	// 2. 获取交易ID
+	// 2. Get transaction ID
 	//txHash := tx.TxHash().String()
-	//log.Printf("处理原始交易: %s, 输入: %d, 输出: %d",	txHash, len(tx.TxIn), len(tx.TxOut))
+	//log.Printf("Processing raw transaction: %s, inputs: %d, outputs: %d",	txHash, len(tx.TxIn), len(tx.TxOut))
 
-	// 3. 处理交易输出，创建新的UTXO
+	// 3. Process transaction outputs, create new UTXOs
 	err = m.processOutputs(tx)
 	if err != nil {
-		return fmt.Errorf("处理交易输出失败: %w", err)
+		return fmt.Errorf("Failed to process transaction outputs: %w", err)
 	}
 
-	// 4. 处理交易输入，标记花费的UTXO
+	// 4. Process transaction inputs, mark spent UTXOs
 	err = m.processInputs(tx)
 	if err != nil {
-		return fmt.Errorf("处理交易输入失败: %w", err)
+		return fmt.Errorf("Failed to process transaction inputs: %w", err)
 	}
 
 	return nil
 }
 
-// processOutputs 处理交易输出，创建新的UTXO
+// processOutputs processes transaction outputs, creates new UTXOs
 func (m *MempoolManager) processOutputs(tx *wire.MsgTx) error {
 	txHash := tx.TxHash().String()
 	//fmt.Println(config.GlobalConfig.RPC.Chain, ">>>>>>>>>")
@@ -112,107 +112,107 @@ func (m *MempoolManager) processOutputs(tx *wire.MsgTx) error {
 		txHash, _ = blockchain.GetNewHash(tx)
 	}
 
-	// 处理每个输出
+	// Process each output
 	for i, out := range tx.TxOut {
 		address := blockchain.GetAddressFromScript("", out.PkScript, m.chainCfg, config.GlobalConfig.RPC.Chain)
-		// 解析输出脚本，提取地址
+		// Parse output script, extract addresses
 		// addresses, err := ExtractAddressesFromOutput(out, m.chainCfg)
 		// if err != nil {
-		// 	log.Printf("解析输出脚本失败 %s:%d: %v", txHash, i, err)
+		// 	log.Printf("Failed to parse output script %s:%d: %v", txHash, i, err)
 		// 	continue
 		// }
 
-		// // 如果没有提取到地址，跳过
+		// // If no addresses extracted, skip
 		// if len(addresses) == 0 {
 		// 	continue
 		// }
 
-		// 为每个地址创建UTXO索引
+		// Create UTXO index for each address
 		outputIndex := strconv.Itoa(i)
 		utxoID := txHash + ":" + outputIndex
-		//fmt.Println("开始处理存入--------->", utxoID, address, out.Value)
+		//fmt.Println("Start processing deposit--------->", utxoID, address, out.Value)
 		value := strconv.FormatInt(out.Value, 10)
-		// 构建存储key:addr1_tx1:0的方式，value:utxo的金额
-		// 存储UTXO -> 地址的映射到内存池收入数据库
+		// Build storage key: addr1_tx1:0 format, value: UTXO amount
+		// Store UTXO -> address mapping to mempool income database
 		//err := m.mempoolIncomeDB.AddRecord(utxoID, address, []byte(value))
 		key := common.ConcatBytesOptimized([]string{address, utxoID}, "_")
 		err := m.mempoolIncomeDB.AddMempolRecord(key, []byte(value))
 		if err != nil {
-			log.Printf("存储内存池UTXO索引失败 %s -> %s: %v", utxoID, address, err)
+			log.Printf("Failed to store mempool UTXO index %s -> %s: %v", utxoID, address, err)
 			continue
 		}
 		// list, err := m.mempoolIncomeDB.GetUtxoByKey(address)
 		// if err != nil {
-		// 	log.Printf("获取内存池收入金额失败 %s: %v", utxoID, err)
+		// 	log.Printf("Failed to get mempool income amount %s: %v", utxoID, err)
 		// 	continue
 		// }
 		// for _, utxo := range list {
-		// 	log.Println("获取存入", utxo.TxID, address, utxo.Amount)
+		// 	log.Println("Get deposit", utxo.TxID, address, utxo.Amount)
 		// }
 	}
 
 	return nil
 }
 
-// processInputs 处理交易输入，标记花费的UTXO
+// processInputs processes transaction inputs, marks spent UTXOs
 func (m *MempoolManager) processInputs(tx *wire.MsgTx) error {
-	// 跳过挖矿交易
+	// Skip mining transactions
 	if IsCoinbaseTx(tx) {
 		return nil
 	}
 
-	// 处理每个输入
+	// Process each input
 	for _, in := range tx.TxIn {
-		// 构建被花费的UTXO ID
+		// Build spent UTXO ID
 		prevTxHash := in.PreviousOutPoint.Hash.String()
 		prevOutputIndex := strconv.Itoa(int(in.PreviousOutPoint.Index))
 		spentUtxoID := prevTxHash + ":" + prevOutputIndex
 		// var utxoAddress string
 		// var utxoAmount string
 		// //fmt.Println(spentUtxoID)
-		// // 直接从主UTXO存储获取数据
+		// // Get data directly from main UTXO storage
 		// utxoData, err := m.utxoStore.Get([]byte(prevTxHash))
 		// if err == nil {
-		// 	// 处理开头的逗号
+		// 	// Handle leading comma
 		// 	utxoStr := string(utxoData)
-		// 	//fmt.Println("主库", utxoStr)
+		// 	//fmt.Println("Main DB", utxoStr)
 		// 	if len(utxoStr) > 0 && utxoStr[0] == ',' {
 		// 		utxoStr = utxoStr[1:]
 		// 	}
 		// 	parts := strings.Split(utxoStr, ",")
 		// 	if len(parts) > int(in.PreviousOutPoint.Index) {
-		// 		// 解析地址和金额
+		// 		// Parse address and amount
 		// 		outputInfo := strings.Split(parts[in.PreviousOutPoint.Index], "@")
 		// 		if len(outputInfo) >= 2 {
-		// 			// 获取地址
+		// 			// Get address
 		// 			utxoAddress = outputInfo[0]
-		// 			// 获取金额
+		// 			// Get amount
 		// 			// if amount, err := strconv.ParseUint(outputInfo[1], 10, 64); err == nil {
 		// 			// 	utxoAmount = amount
 		// 			// }
 		// 			utxoAmount = outputInfo[1]
 		// 		}
 		// 	}
-		// 	//fmt.Println("主库", utxoAddress, utxoAmount)
+		// 	//fmt.Println("Main DB", utxoAddress, utxoAmount)
 		// } else if err == storage.ErrNotFound {
-		// 	// 主UTXO存储中没找到，尝试从内存池收入数据库查找
+		// 	// Not found in main UTXO storage, try to find in mempool income database
 		// 	utxoAddress, utxoAmount, err = m.mempoolIncomeDB.GetByUTXO(spentUtxoID)
 		// 	if err != nil {
-		// 		// 如果内存池收入数据库也没有找到，从节点获取
+		// 		// If not found in mempool income database either, get from node
 		// 		utxoAddress, utxoAmount, _ = getInfoFromNode(spentUtxoID)
 		// 	}
 		// } else {
-		// 	// 如果内存池收入数据库也没有找到，从节点获取
+		// 	// If not found in mempool income database either, get from node
 		// 	utxoAddress, utxoAmount, _ = getInfoFromNode(spentUtxoID)
 		// }
-		// 记录到内存池支出数据库
-		// 记录到内存池支出数据库，包含金额信息
+		// Record to mempool spend database
+		// Record to mempool spend database, including amount information
 		// if utxoAddress == "" || utxoAmount == "" {
-		// 	log.Printf("无效的UTXO信息，跳过: %s", spentUtxoID)
+		// 	log.Printf("Invalid UTXO information, skipping: %s", spentUtxoID)
 		// 	continue
 		// }
 		//err = m.mempoolSpendDB.AddRecord(spentUtxoID, utxoAddress, []byte(utxoAmount))
-		//fmt.Println("存储花费：", spentUtxoID, utxoAddress, utxoAmount, err)
+		//fmt.Println("Store spend:", spentUtxoID, utxoAddress, utxoAmount, err)
 		m.mempoolSpendDB.AddMempolRecord(spentUtxoID, []byte(""))
 	}
 	return nil
@@ -220,35 +220,35 @@ func (m *MempoolManager) processInputs(tx *wire.MsgTx) error {
 func getInfoFromNode(spentUtxoID string) (string, string, error) {
 	hashArr := strings.Split(spentUtxoID, ":")
 	if len(hashArr) != 2 {
-		return "", "", fmt.Errorf("无效的UTXO ID格式: %s", spentUtxoID)
+		return "", "", fmt.Errorf("Invalid UTXO ID format: %s", spentUtxoID)
 	}
 	txHashStr := hashArr[0]
 	outputIndex, err := strconv.Atoi(hashArr[1])
 	if err != nil {
-		return "", "", fmt.Errorf("无效的输出索引: %s", hashArr[1])
+		return "", "", fmt.Errorf("Invalid output index: %s", hashArr[1])
 	}
-	// 使用全局RPC客户端获取交易详情
+	// Use global RPC client to get transaction details
 	txHash, err := chainhash.NewHashFromStr(txHashStr)
 	if err != nil {
-		return "", "", fmt.Errorf("无效的交易哈希: %s", txHashStr)
+		return "", "", fmt.Errorf("Invalid transaction hash: %s", txHashStr)
 	}
 	tx, err := blockchain.RpcClient.GetRawTransaction(txHash)
 	if err != nil {
-		return "", "", fmt.Errorf("获取交易详情失败: %w", err)
+		return "", "", fmt.Errorf("Failed to get transaction details: %w", err)
 	}
-	// 确保交易有足够的输出
+	// Ensure transaction has enough outputs
 	if outputIndex < 0 || outputIndex >= len(tx.MsgTx().TxOut) {
-		return "", "", fmt.Errorf("输出索引超出范围: %d", outputIndex)
+		return "", "", fmt.Errorf("Output index out of range: %d", outputIndex)
 	}
-	// 获取输出脚本和金额
+	// Get output script and amount
 	out := tx.MsgTx().TxOut[outputIndex]
 	address := blockchain.GetAddressFromScript("", out.PkScript, config.GlobalNetwork, config.GlobalConfig.RPC.Chain)
-	// 解析金额
+	// Parse amount
 	amount := strconv.FormatInt(out.Value, 10)
 	return address, amount, nil
 }
 
-// DeserializeTransaction 将字节数组反序列化为交易
+// DeserializeTransaction deserializes byte array to transaction
 func DeserializeTransaction(data []byte) (*wire.MsgTx, error) {
 	tx := wire.NewMsgTx(wire.TxVersion)
 	err := tx.Deserialize(bytes.NewReader(data))
@@ -258,15 +258,15 @@ func DeserializeTransaction(data []byte) (*wire.MsgTx, error) {
 	return tx, nil
 }
 
-// ExtractAddressesFromOutput 从交易输出中提取地址
+// ExtractAddressesFromOutput extracts addresses from transaction output
 func ExtractAddressesFromOutput(out *wire.TxOut, chainCfg *chaincfg.Params) ([]string, error) {
-	// 解析输出脚本
+	// Parse output script
 	_, addresses, _, err := txscript.ExtractPkScriptAddrs(out.PkScript, chainCfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// 转换为字符串数组
+	// Convert to string array
 	result := make([]string, len(addresses))
 	for i, addr := range addresses {
 		result[i] = addr.String()
@@ -275,14 +275,14 @@ func ExtractAddressesFromOutput(out *wire.TxOut, chainCfg *chaincfg.Params) ([]s
 	return result, nil
 }
 
-// IsCoinbaseTx 检查交易是否是挖矿交易
+// IsCoinbaseTx checks if transaction is a mining transaction
 func IsCoinbaseTx(tx *wire.MsgTx) bool {
-	// 挖矿交易只有一个输入
+	// Mining transaction has only one input
 	if len(tx.TxIn) != 1 {
 		return false
 	}
 
-	// 挖矿交易的前一个输出哈希为0
+	// Mining transaction's previous output hash is 0
 	zeroHash := &wire.OutPoint{
 		Hash:  chainhash.Hash{},
 		Index: 0xffffffff,
@@ -292,83 +292,58 @@ func IsCoinbaseTx(tx *wire.MsgTx) bool {
 		tx.TxIn[0].PreviousOutPoint.Index == zeroHash.Index
 }
 
-// getScriptType 获取脚本类型
-func getScriptType(script []byte) string {
-	// 获取脚本类型
-	scriptClass := txscript.GetScriptClass(script)
-
-	switch scriptClass {
-	case txscript.PubKeyHashTy:
-		return "p2pkh"
-	case txscript.ScriptHashTy:
-		return "p2sh"
-	case txscript.WitnessV0PubKeyHashTy:
-		return "p2wpkh"
-	case txscript.WitnessV0ScriptHashTy:
-		return "p2wsh"
-	case txscript.PubKeyTy:
-		return "p2pk"
-	case txscript.MultiSigTy:
-		return "multisig"
-	case txscript.NullDataTy:
-		return "nulldata"
-	default:
-		return "unknown"
-	}
-}
-
-// ProcessNewBlockTxs 处理新区块中的交易，清理内存池记录
+// ProcessNewBlockTxs processes transactions in new blocks, cleans mempool records
 func (m *MempoolManager) ProcessNewBlockTxs(incomeUtxoList []common.Utxo, spendTxList []string) error {
 	if len(incomeUtxoList) == 0 {
 		return nil
 	}
 
-	//log.Printf("处理新区块中的 %d 个交易，清理内存池记录", len(incomeUtxoList))
+	//log.Printf("Processing %d transactions in new block, cleaning mempool records", len(incomeUtxoList))
 
-	// 删除income
+	// Delete income
 	for _, utxo := range incomeUtxoList {
-		// 1. 从内存池收入数据库中删除相关记录
+		// 1. Delete related records from mempool income database
 		//fmt.Println("delete", utxo.TxID, utxo.Address)
 
 		err := m.mempoolIncomeDB.DeleteRecord(utxo.TxID, utxo.Address)
 		if err != nil {
-			log.Printf("删除内存池收入记录失败 %s: %v", utxo.TxID, err)
+			log.Printf("Failed to delete mempool income record %s: %v", utxo.TxID, err)
 		}
-		//log.Printf("已清理交易 %s 的内存池记录", txid)
+		//log.Printf("Cleaned mempool record for transaction %s", txid)
 	}
-	// 删除spend
+	// Delete spend
 	for _, txid := range spendTxList {
 		err := m.mempoolSpendDB.DeleteSpendRecord(txid)
 		if err != nil {
-			log.Printf("删除内存池支出记录失败 %s: %v", txid, err)
+			log.Printf("Failed to delete mempool spend record %s: %v", txid, err)
 		}
 	}
 	return nil
 }
 
-// CleanByHeight 通过区块高度清理内存池记录
+// CleanByHeight cleans mempool records by block height
 func (m *MempoolManager) CleanByHeight(height int, bcClient interface{}) error {
-	log.Printf("开始清理内存池，处理到区块高度: %d", height)
+	log.Printf("Starting to clean mempool, processing to block height: %d", height)
 
-	// 尝试断言bcClient为blockchain.Client类型
+	// Try to assert bcClient as blockchain.Client type
 	client, ok := bcClient.(*blockchain.Client)
 	if !ok {
-		return fmt.Errorf("不支持的区块链客户端类型")
+		return fmt.Errorf("Unsupported blockchain client type")
 	}
 
-	// 获取该高度的区块哈希
+	// Get block hash at this height
 	blockHash, err := client.GetBlockHash(int64(height))
 	if err != nil {
-		return fmt.Errorf("获取区块哈希失败: %w", err)
+		return fmt.Errorf("Failed to get block hash: %w", err)
 	}
 
-	// 获取区块详细信息
+	// Get block details
 	block, err := client.GetBlock(blockHash)
 	if err != nil {
-		return fmt.Errorf("获取区块信息失败: %w", err)
+		return fmt.Errorf("Failed to get block information: %w", err)
 	}
 
-	// 提取incomeUtxo列表
+	// Extract incomeUtxo list
 	var incomeUtxoList []common.Utxo
 	var spendTxList []string
 	for _, tx := range block.Tx {
@@ -386,34 +361,34 @@ func (m *MempoolManager) CleanByHeight(height int, bcClient interface{}) error {
 			incomeUtxoList = append(incomeUtxoList, common.Utxo{TxID: txId, Address: address})
 		}
 	}
-	// 清理内存池记录
+	// Clean mempool records
 	return m.ProcessNewBlockTxs(incomeUtxoList, spendTxList)
 }
 
-// InitializeMempool 在启动时从节点获取当前所有内存池交易并处理
-// 该方法异步执行，避免阻塞主程序
+// InitializeMempool fetches and processes all current mempool transactions from the node at startup
+// This method runs asynchronously to avoid blocking the main program
 func (m *MempoolManager) InitializeMempool(bcClient interface{}) {
-	// 使用单独的goroutine执行，避免阻塞主程序
+	// Use a separate goroutine to avoid blocking the main program
 	go func() {
-		log.Printf("开始初始化内存池数据...")
+		log.Printf("Starting mempool data initialization...")
 
-		// 断言为blockchain.Client
+		// Assert as blockchain.Client
 		client, ok := bcClient.(*blockchain.Client)
 		if !ok {
-			log.Printf("初始化内存池失败: 不支持的区块链客户端类型")
+			log.Printf("Failed to initialize mempool: unsupported blockchain client type")
 			return
 		}
 
-		// 获取内存池中的所有交易ID
+		// Get all transaction IDs in the mempool
 		txids, err := client.GetRawMempool()
 		if err != nil {
-			log.Printf("获取内存池交易列表失败: %v", err)
+			log.Printf("Failed to get mempool transaction list: %v", err)
 			return
 		}
 
-		log.Printf("从节点获取到 %d 个内存池交易，开始处理...", len(txids))
+		log.Printf("Fetched %d mempool transactions from node, start processing...", len(txids))
 
-		// 分批处理交易，每批处理100个，避免一次性占用太多内存
+		// Process transactions in batches, 500 per batch to avoid excessive memory usage
 		batchSize := 500
 		totalBatches := (len(txids) + batchSize - 1) / batchSize
 
@@ -424,44 +399,44 @@ func (m *MempoolManager) InitializeMempool(bcClient interface{}) {
 				end = len(txids)
 			}
 
-			// 处理当前批次
+			// Process current batch
 			currentBatch := txids[start:end]
-			log.Printf("处理内存池交易批次 %d/%d (%d 个交易)", batchIdx+1, totalBatches, len(currentBatch))
+			log.Printf("Processing mempool transaction batch %d/%d (%d transactions)", batchIdx+1, totalBatches, len(currentBatch))
 
 			for _, txid := range currentBatch {
-				// 获取交易详情
+				// Get transaction details
 				tx, err := client.GetRawTransaction(txid)
 				if err != nil {
-					log.Printf("获取交易详情失败 %s: %v", txid, err)
+					log.Printf("Failed to get transaction details %s: %v", txid, err)
 					continue
 				}
 
-				// 使用现有的交易处理方法处理交易
+				// Use existing transaction processing methods
 				msgTx := tx.MsgTx()
 
-				// 先处理输出（创建新的UTXO）
+				// Process outputs first (create new UTXOs)
 				if err := m.processOutputs(msgTx); err != nil {
-					log.Printf("处理交易输出失败 %s: %v", txid, err)
+					log.Printf("Failed to process transaction outputs %s: %v", txid, err)
 					continue
 				}
 
-				// 再处理输入（标记花费的UTXO）
+				// Then process inputs (mark spent UTXOs)
 				if err := m.processInputs(msgTx); err != nil {
-					log.Printf("处理交易输入失败 %s: %v", txid, err)
+					log.Printf("Failed to process transaction inputs %s: %v", txid, err)
 					continue
 				}
 			}
 
-			// 批次处理完毕，暂停一小段时间让其他程序有机会执行
-			// 避免持续高负载
+			// After batch is processed, pause briefly to allow other programs to execute
+			// Avoid sustained high load
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		log.Printf("内存池数据初始化完成，共处理 %d 个交易", len(txids))
+		log.Printf("Mempool data initialization complete, processed %d transactions in total", len(txids))
 	}()
 }
 
-// GetUTXOsByAddress 查询地址在内存池中的未花费UTXO
+// GetUTXOsByAddress queries unspent UTXOs for an address in the mempool
 // func (m *MempoolManager) GetUTXOsByAddress(address string) ([]struct {
 // 	TxID   string
 // 	Index  string
@@ -473,50 +448,50 @@ func (m *MempoolManager) InitializeMempool(bcClient interface{}) {
 // 		Amount uint64
 // 	}{}
 
-// 	// 1. 使用后缀查询直接获取与地址相关的所有键
+// 	// 1. Use suffix query to directly get all keys related to the address
 // 	keys, err := m.mempoolIncomeDB.GetKeysWithSuffix(address)
 // 	if err != nil {
 // 		if errors.Is(err, storage.ErrNotFound) {
-// 			return result, nil // 地址没有内存池UTXO
+// 			return result, nil // Address has no mempool UTXOs
 // 		}
-// 		return nil, fmt.Errorf("查询地址UTXO失败: %w", err)
+// 		return nil, fmt.Errorf("Failed to query address UTXOs: %w", err)
 // 	}
 
-// 	// 2. 获取已花费的UTXO
+// 	// 2. Get spent UTXOs
 // 	spentUtxos := make(map[string]struct{})
 
-// 	// 查询地址在支出数据库中的索引
+// 	// Query address index in spend database
 // 	spendKeys, err := m.mempoolSpendDB.GetKeysWithSuffix(address)
 // 	if err == nil && len(spendKeys) > 0 {
 // 		for _, key := range spendKeys {
 // 			parts := strings.Split(key, "_")
 // 			if len(parts) == 2 {
-// 				spentUtxos[parts[0]] = struct{}{} // 记录已花费的utxoID
+// 				spentUtxos[parts[0]] = struct{}{} // Record spent utxoID
 // 			}
 // 		}
 // 	}
 
-// 	// 3. 处理每个未花费的UTXO
+// 	// 3. Process each unspent UTXO
 // 	for _, key := range keys {
 // 		parts := strings.Split(key, "_")
 // 		if len(parts) != 2 {
-// 			continue // 格式无效
+// 			continue // Invalid format
 // 		}
 
 // 		utxoID := parts[0] // txid:index
 
-// 		// 检查是否已被花费
+// 		// Check if already spent
 // 		if _, spent := spentUtxos[utxoID]; spent {
-// 			continue // 跳过已花费的UTXO
+// 			continue // Skip spent UTXO
 // 		}
 
-// 		// 获取UTXO值
+// 		// Get UTXO value
 // 		value, err := m.mempoolIncomeDB.Get([]byte(key))
 // 		if err != nil {
 // 			continue
 // 		}
 
-// 		// 解析值 (amount@script_type)
+// 		// Parse value (amount@script_type)
 // 		valueStr := string(value)
 // 		valueInfo := strings.Split(valueStr, "@")
 // 		if len(valueInfo) < 1 {
@@ -528,12 +503,12 @@ func (m *MempoolManager) InitializeMempool(bcClient interface{}) {
 // 			continue
 // 		}
 
-// 		// 跳过小额UTXO (dust)
+// 		// Skip small UTXOs (dust)
 // 		if amount <= 1000 {
 // 			continue
 // 		}
 
-// 		// 解析UTXO ID
+// 		// Parse UTXO ID
 // 		utxoParts := strings.Split(utxoID, ":")
 // 		if len(utxoParts) != 2 {
 // 			continue
@@ -553,34 +528,34 @@ func (m *MempoolManager) InitializeMempool(bcClient interface{}) {
 // 	return result, nil
 // }
 
-// CleanAllMempool 清理所有内存池数据，用于完全重建
+// CleanAllMempool cleans all mempool data for complete rebuild
 func (m *MempoolManager) CleanAllMempool() error {
-	log.Println("正在通过删除物理文件重置内存池数据...")
+	log.Println("Resetting mempool data by deleting physical files...")
 
-	// 保存ZMQ地址，后面需要重建
+	// Save ZMQ address for later reconstruction
 	zmqAddress := ""
 	if m.zmqClient != nil {
 		zmqAddress = m.zmqClient.address
 	}
 
-	// 使用basePath和固定表名获取数据库文件路径
+	// Use basePath and fixed table names to get database file paths
 	incomeDbPath := m.basePath + "/mempool_income"
 	spendDbPath := m.basePath + "/mempool_spend"
 
-	// 不再尝试检测数据库状态，直接使用defer和recover处理可能的panic
+	// No longer try to detect database status, directly use defer and recover to handle possible panics
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("清理过程中捕获到异常: %v，继续执行文件删除", r)
+			log.Printf("Exception caught during cleanup: %v, continuing with file deletion", r)
 		}
 	}()
 
-	// 安全关闭数据库连接
-	log.Println("关闭现有内存池数据库连接...")
-	// 使用recover避免重复关闭导致的panic
+	// Safely close database connections
+	log.Println("Closing existing mempool database connections...")
+	// Use recover to avoid panic from repeated closing
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("关闭收入数据库时发生错误: %v", r)
+				log.Printf("Error occurred while closing income database: %v", r)
 			}
 		}()
 		if m.mempoolIncomeDB != nil {
@@ -591,7 +566,7 @@ func (m *MempoolManager) CleanAllMempool() error {
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("关闭支出数据库时发生错误: %v", r)
+				log.Printf("Error occurred while closing spend database: %v", r)
 			}
 		}()
 		if m.mempoolSpendDB != nil {
@@ -599,78 +574,78 @@ func (m *MempoolManager) CleanAllMempool() error {
 		}
 	}()
 
-	// 删除物理文件
-	log.Printf("删除内存池收入数据库: %s", incomeDbPath)
+	// Delete physical files
+	log.Printf("Deleting mempool income database: %s", incomeDbPath)
 	if err := os.RemoveAll(incomeDbPath); err != nil {
-		log.Printf("删除内存池收入数据库失败: %v", err)
-		// 失败后重新创建连接
+		log.Printf("Failed to delete mempool income database: %v", err)
+		// Recreate connection after failure
 		newIncomeDB, err := storage.NewSimpleDB(incomeDbPath)
 		if err != nil {
-			log.Printf("重新创建内存池收入数据库失败: %v", err)
+			log.Printf("Failed to recreate mempool income database: %v", err)
 		} else {
 			m.mempoolIncomeDB = newIncomeDB
 		}
 		return err
 	}
 
-	log.Printf("删除内存池支出数据库: %s", spendDbPath)
+	log.Printf("Deleting mempool spend database: %s", spendDbPath)
 	if err := os.RemoveAll(spendDbPath); err != nil {
-		log.Printf("删除内存池支出数据库失败: %v", err)
-		// 失败后重新创建连接
+		log.Printf("Failed to delete mempool spend database: %v", err)
+		// Recreate connection after failure
 		newIncomeDB, err := storage.NewSimpleDB(incomeDbPath)
 		if err != nil {
-			log.Printf("重新创建内存池收入数据库失败: %v", err)
+			log.Printf("Failed to recreate mempool income database: %v", err)
 		} else {
 			m.mempoolIncomeDB = newIncomeDB
 		}
 		newSpendDB, err := storage.NewSimpleDB(spendDbPath)
 		if err != nil {
-			log.Printf("重新创建内存池支出数据库失败: %v", err)
+			log.Printf("Failed to recreate mempool spend database: %v", err)
 		} else {
 			m.mempoolSpendDB = newSpendDB
 		}
 		return err
 	}
 
-	// 重新创建数据库
-	log.Println("重新创建内存池数据库...")
+	// Recreate databases
+	log.Println("Recreating mempool databases...")
 	newIncomeDB, err := storage.NewSimpleDB(incomeDbPath)
 	if err != nil {
-		log.Printf("重新创建内存池收入数据库失败: %v", err)
+		log.Printf("Failed to recreate mempool income database: %v", err)
 		return err
 	}
 
 	newSpendDB, err := storage.NewSimpleDB(spendDbPath)
 	if err != nil {
 		newIncomeDB.Close()
-		log.Printf("重新创建内存池支出数据库失败: %v", err)
+		log.Printf("Failed to recreate mempool spend database: %v", err)
 		return err
 	}
 
-	// 更新数据库引用
+	// Update database references
 	m.mempoolIncomeDB = newIncomeDB
 	m.mempoolSpendDB = newSpendDB
 
-	// 重新创建ZMQ客户端
+	// Recreate ZMQ client
 	if zmqAddress != "" {
-		log.Println("重新创建ZMQ客户端...")
+		log.Println("Recreating ZMQ client...")
 		m.zmqClient = NewZMQClient(zmqAddress, nil)
 
-		// 重新添加监听主题
-		log.Println("重新添加ZMQ监听主题...")
+		// Re-add listening topics
+		log.Println("Re-adding ZMQ listening topics...")
 		m.zmqClient.AddTopic("rawtx", m.HandleRawTransaction)
 	}
 
-	log.Println("内存池数据完全重置成功")
+	log.Println("Mempool data completely reset")
 	return nil
 }
 
-// GetBasePath 返回内存池数据的基础路径
+// GetBasePath returns the base path for mempool data
 func (m *MempoolManager) GetBasePath() string {
 	return m.basePath
 }
 
-// GetZmqAddress 返回ZMQ服务器地址
+// GetZmqAddress returns the ZMQ server address
 func (m *MempoolManager) GetZmqAddress() string {
 	if m.zmqClient != nil {
 		return m.zmqClient.address
@@ -678,9 +653,9 @@ func (m *MempoolManager) GetZmqAddress() string {
 	return ""
 }
 
-// RebuildMempool 重建内存池数据（删除并重新初始化数据库和ZMQ监听）
+// RebuildMempool rebuilds the mempool data (deletes and reinitializes the database and ZMQ listening)
 func (m *MempoolManager) RebuildMempool() error {
-	log.Println("正在通过删除物理文件重建内存池数据...")
+	log.Println("Resetting mempool data by deleting physical files...")
 
 	zmqAddress := ""
 	if m.zmqClient != nil {
@@ -692,15 +667,15 @@ func (m *MempoolManager) RebuildMempool() error {
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("重建过程中捕获到异常: %v，继续执行文件删除", r)
+			log.Printf("Exception caught during rebuild: %v, continuing with file deletion", r)
 		}
 	}()
 
-	log.Println("关闭现有内存池数据库连接...")
+	log.Println("Closing existing mempool database connections...")
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("关闭收入数据库时发生错误: %v", r)
+				log.Printf("Error occurred while closing income database: %v", r)
 			}
 		}()
 		if m.mempoolIncomeDB != nil {
@@ -710,7 +685,7 @@ func (m *MempoolManager) RebuildMempool() error {
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("关闭支出数据库时发生错误: %v", r)
+				log.Printf("Error occurred while closing spend database: %v", r)
 			}
 		}()
 		if m.mempoolSpendDB != nil {
@@ -718,40 +693,40 @@ func (m *MempoolManager) RebuildMempool() error {
 		}
 	}()
 
-	log.Printf("删除内存池收入数据库: %s", incomeDbPath)
+	log.Printf("Deleting mempool income database: %s", incomeDbPath)
 	if err := os.RemoveAll(incomeDbPath); err != nil {
-		log.Printf("删除内存池收入数据库失败: %v", err)
+		log.Printf("Failed to delete mempool income database: %v", err)
 		return err
 	}
 
-	log.Printf("删除内存池支出数据库: %s", spendDbPath)
+	log.Printf("Deleting mempool spend database: %s", spendDbPath)
 	if err := os.RemoveAll(spendDbPath); err != nil {
-		log.Printf("删除内存池支出数据库失败: %v", err)
+		log.Printf("Failed to delete mempool spend database: %v", err)
 		return err
 	}
 
-	log.Println("重新创建内存池数据库...")
+	log.Println("Recreating mempool databases...")
 	newIncomeDB, err := storage.NewSimpleDB(incomeDbPath)
 	if err != nil {
-		log.Printf("重新创建内存池收入数据库失败: %v", err)
+		log.Printf("Failed to recreate mempool income database: %v", err)
 		return err
 	}
 	newSpendDB, err := storage.NewSimpleDB(spendDbPath)
 	if err != nil {
 		newIncomeDB.Close()
-		log.Printf("重新创建内存池支出数据库失败: %v", err)
+		log.Printf("Failed to recreate mempool spend database: %v", err)
 		return err
 	}
 	m.mempoolIncomeDB = newIncomeDB
 	m.mempoolSpendDB = newSpendDB
 
 	if zmqAddress != "" {
-		log.Println("重新创建ZMQ客户端...")
+		log.Println("Recreating ZMQ client...")
 		m.zmqClient = NewZMQClient(zmqAddress, nil)
-		log.Println("重新添加ZMQ监听主题...")
+		log.Println("Re-adding ZMQ listening topics...")
 		m.zmqClient.AddTopic("rawtx", m.HandleRawTransaction)
 	}
 
-	log.Println("内存池数据完全重建成功")
+	log.Println("Mempool data completely rebuilt")
 	return nil
 }

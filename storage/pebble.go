@@ -23,11 +23,11 @@ var (
 	// ErrNotFound is returned when a key is not found in the database
 	ErrNotFound  = errors.New("not found")
 	maxBatchSize = int(4) * 1024 * 1024
-	// 创建自定义的日志禁用器
+	// Create custom log disabler
 	noopLogger = &customLogger{}
 )
 
-// 自定义日志记录器 - 不输出任何内容
+// Custom logger - outputs nothing
 type customLogger struct{}
 
 func (l *customLogger) Infof(format string, args ...interface{})  {}
@@ -95,7 +95,7 @@ func NewMetaStore(dataDir string) (*MetaStore, error) {
 	return &MetaStore{db: db}, nil
 }
 
-// 配置数据库选项
+// Configure database options
 
 func NewPebbleStore(params config.IndexerParams, dataDir string, storeType StoreType, shardCount int) (*PebbleStore, error) {
 	if shardCount <= 0 {
@@ -115,11 +115,11 @@ func NewPebbleStore(params config.IndexerParams, dataDir string, storeType Store
 				Compression: pebble.NoCompression,
 			},
 		},
-		//MemTableSize:                32 << 20, // 降低为32MB (默认64MB)
-		//MemTableStopWritesThreshold: 2,        // 默认4
-		// 限制 block cache 大小（比如 128MB，可根据机器内存调整）
+		//MemTableSize:                32 << 20, // Reduce to 32MB (default 64MB)
+		//MemTableStopWritesThreshold: 2,        // Default 4
+		// Limit block cache size (e.g., 128MB, adjust based on machine memory)
 		Cache: pebble.NewCache(2 << 30), // 128MB
-		// 限制 table cache 数量（比如 64）
+		// Limit table cache count (e.g., 64)
 		//MaxOpenFiles: 512,
 	}
 	store := &PebbleStore{
@@ -222,13 +222,13 @@ func (s *PebbleStore) getShardIndex(key string) int {
 	return int(h % uint64(len(s.shards)))
 }
 
-// BulkWriteMapConcurrent 将一个 key 极多的 map 并发地写入到对应的分片中
+// BulkWriteMapConcurrent concurrently writes a map with many keys to corresponding shards
 func (s *PebbleStore) BulkWriteMapConcurrent(data *map[string][]string, concurrency int) error {
 	if concurrency <= 0 {
 		concurrency = runtime.NumCPU()
 	}
 
-	// 按照 shard 数量分配 worker
+	// Allocate workers based on shard count
 	type job struct {
 		shardIdx int
 		key      string
@@ -238,7 +238,7 @@ func (s *PebbleStore) BulkWriteMapConcurrent(data *map[string][]string, concurre
 	jobsCh := make(chan job, len(*data))
 	errCh := make(chan error, 1)
 
-	// 启动 workers
+	// Start workers
 	var wg sync.WaitGroup
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
@@ -251,7 +251,7 @@ func (s *PebbleStore) BulkWriteMapConcurrent(data *map[string][]string, concurre
 			for job := range jobsCh {
 				db := s.shards[job.shardIdx]
 
-				// 切换 shard 时提交当前 batch
+				// Commit current batch when switching shards
 				if currentBatch != nil && currentShardIdx != job.shardIdx {
 					if err := currentBatch.Commit(pebble.Sync); err != nil {
 						select {
@@ -264,13 +264,13 @@ func (s *PebbleStore) BulkWriteMapConcurrent(data *map[string][]string, concurre
 					currentBatch = nil
 				}
 
-				// 初始化 batch
+				// Initialize batch
 				if currentBatch == nil {
 					currentBatch = db.NewBatch()
 					currentShardIdx = job.shardIdx
 				}
 
-				// 写入数据
+				// Write data
 				if err := currentBatch.Set([]byte(job.key), job.value, nil); err != nil {
 					select {
 					case errCh <- fmt.Errorf("set failed on shard %d: %w", job.shardIdx, err):
@@ -279,7 +279,7 @@ func (s *PebbleStore) BulkWriteMapConcurrent(data *map[string][]string, concurre
 					return
 				}
 
-				// 控制 batch 大小（例如 4MB）
+				// Control batch size (e.g., 4MB)
 				//if currentBatch.Len() > 4<<20 { // 4MB
 				if currentBatch.Len() > maxBatchSize {
 					if err := currentBatch.Commit(pebble.Sync); err != nil {
@@ -293,7 +293,7 @@ func (s *PebbleStore) BulkWriteMapConcurrent(data *map[string][]string, concurre
 				}
 			}
 
-			// 提交最后的 batch
+			// Commit final batch
 			if currentBatch != nil {
 				if err := currentBatch.Commit(pebble.Sync); err != nil {
 					select {
@@ -305,11 +305,11 @@ func (s *PebbleStore) BulkWriteMapConcurrent(data *map[string][]string, concurre
 		}()
 	}
 
-	// 发送任务
+	// Send tasks
 	for key, values := range *data {
 		fmt.Println("key:", key, "values:", strings.Join(values, ","))
 		shardIdx := s.getShardIndex(key)
-		valueBytes := []byte(strings.Join(values, ",")) // 可替换为其他序列化方式
+		valueBytes := []byte(strings.Join(values, ",")) // Can be replaced with other serialization methods
 		jobsCh <- job{
 			shardIdx: shardIdx,
 			key:      key,
@@ -318,12 +318,12 @@ func (s *PebbleStore) BulkWriteMapConcurrent(data *map[string][]string, concurre
 	}
 	close(jobsCh)
 
-	// 等待完成
+	// Wait for completion
 	go func() {
 		wg.Wait()
 	}()
 
-	// 检查错误
+	// Check for errors
 	select {
 	case err := <-errCh:
 		return err
@@ -374,8 +374,8 @@ func (s *PebbleStore) SaveLastHeight(height int) error {
 	return s.Put(key, []byte(strconv.Itoa(height)))
 }
 
-// 恢复到接近原始版本，只修复几个关键问题
-// 修改 BulkMergeMapConcurrent 函数
+// Restore to near original version, only fix a few key issues
+// Modify BulkMergeMapConcurrent function
 func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concurrency int) error {
 	if concurrency <= 0 {
 		concurrency = runtime.NumCPU()
@@ -391,16 +391,16 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 	errCh := make(chan error, 1)
 
 	var wg sync.WaitGroup
-	// 替换全局锁为分片锁数组
+	// Replace global lock with shard lock array
 	shardMutexes := make([]sync.Mutex, len(s.shards))
 	shardBatches := make([]*pebble.Batch, len(s.shards))
 
-	// 初始化每个 shard 的 batch
+	// Initialize batch for each shard
 	for i := range shardBatches {
 		shardBatches[i] = s.shards[i].NewBatch()
 	}
 
-	// 启动 worker
+	// Start worker
 	// for w := 0; w < concurrency; w++ {
 	// 	wg.Add(1)
 	// 	go func() {
@@ -409,7 +409,7 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 	// 		for job := range jobsCh {
 	// 			db := s.shards[job.shardIdx]
 
-	// 			// 使用分片级锁而非全局锁
+	// 			// Use shard-level lock instead of global lock
 	// 			shardMutexes[job.shardIdx].Lock()
 	// 			batch := shardBatches[job.shardIdx]
 	// 			if batch == nil {
@@ -417,7 +417,7 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 	// 				shardBatches[job.shardIdx] = batch
 	// 			}
 
-	// 			// 使用 Pebble Batch.Merge 进行合并写入
+	// 			// Use Pebble Batch.Merge for merge writes
 	// 			if err := batch.Merge([]byte(job.key), job.value, pebble.NoSync); err != nil {
 	// 				shardMutexes[job.shardIdx].Unlock()
 	// 				select {
@@ -430,8 +430,8 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 	// 		}
 	// 	}()
 	// }
-	// 修改：添加批处理大小限制
-	maxBatchItems := 1000 // 每个批处理的最大条目数
+	// Modification: Add batch size limit
+	maxBatchItems := 1000 // Maximum items per batch
 	batchItemCounters := make([]int, len(s.shards))
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
@@ -448,7 +448,7 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 					shardBatches[job.shardIdx] = batch
 				}
 
-				// 合并写入
+				// Merge write
 				if err := batch.Merge([]byte(job.key), job.value, pebble.Sync); err != nil {
 					shardMutexes[job.shardIdx].Unlock()
 					select {
@@ -458,7 +458,7 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 					return
 				}
 
-				// 检查批处理大小并适时提交
+				// Check batch size and commit when appropriate
 				batchItemCounters[job.shardIdx]++
 				if batchItemCounters[job.shardIdx] >= maxBatchItems || batch.Len() >= maxBatchSize {
 					if err := batch.Commit(pebble.Sync); err != nil {
@@ -469,7 +469,7 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 						}
 						return
 					}
-					// 重置批处理
+					// Reset batch
 					batch.Reset()
 					batchItemCounters[job.shardIdx] = 0
 				}
@@ -478,7 +478,7 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 			}
 		}()
 	}
-	// 发送任务
+	// Send tasks
 	for key, values := range *data {
 		shardIdx := s.getShardIndex(key)
 		valueBytes := []byte("," + strings.Join(values, ","))
@@ -490,34 +490,34 @@ func (s *PebbleStore) BulkMergeMapConcurrentBak(data *map[string][]string, concu
 	}
 	close(jobsCh)
 
-	// 等待全部完成
+	// Wait for all to complete
 	go func() {
 		wg.Wait()
 		close(errCh)
 	}()
 
-	// 检查是否有错误
+	// Check for errors
 	if err := <-errCh; err != nil {
 		return err
 	}
 
-	// 提交所有 batch - 这里也需要使用分片锁
+	// Commit all batches - need to use shard locks here too
 	for i, batch := range shardBatches {
-		shardMutexes[i].Lock() // 加锁保护批次提交
+		shardMutexes[i].Lock() // Lock to protect batch commit
 		if batch != nil && batch.Len() > 0 {
-			// 只有最后一个批次使用Sync，其他用NoSync
+			// Only the last batch uses Sync, others use NoSync
 			commitOption := pebble.Sync
 			if i == len(shardBatches)-1 {
 				commitOption = pebble.Sync
 			}
 			if err := batch.Commit(commitOption); err != nil {
 				_ = batch.Close()
-				shardMutexes[i].Unlock() // 出错时记得解锁
+				shardMutexes[i].Unlock() // Remember to unlock on error
 				return fmt.Errorf("failed to commit shard %d: %w", i, err)
 			}
 			_ = batch.Close()
 		}
-		shardMutexes[i].Unlock() // 完成后解锁
+		shardMutexes[i].Unlock() // Unlock after completion
 	}
 
 	return nil
@@ -528,7 +528,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 		key   string
 		value []byte
 	}
-	// 每个 shard 一个 channel
+	// One channel per shard
 	shardChans := make([]chan job, shardCount)
 	for i := range shardChans {
 		shardChans[i] = make(chan job, 1024)
@@ -536,7 +536,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 	errCh := make(chan error, 1)
 	var wg sync.WaitGroup
 
-	// 每个 shard 启动一个 goroutine
+	// Start one goroutine per shard
 	for shardIdx := range s.shards {
 		wg.Add(1)
 		go func(shardIdx int) {
@@ -572,7 +572,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 		}(shardIdx)
 	}
 
-	// 分发任务到各自的 channel
+	// Distribute tasks to respective channels
 	for key, values := range *data {
 		shardIdx := s.getShardIndex(key)
 		valueBytes := []byte("," + strings.Join(values, ","))
@@ -581,7 +581,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 			value: valueBytes,
 		}
 	}
-	// 关闭所有 channel
+	// Close all channels
 	for _, ch := range shardChans {
 		close(ch)
 	}
@@ -594,7 +594,7 @@ func (s *PebbleStore) BulkMergeMapConcurrent(data *map[string][]string, concurre
 	}
 }
 
-// QueryUTXOAddresses 优化版 - 只做必要修改
+// QueryUTXOAddresses optimized version - only necessary modifications
 func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (map[string][]string, error) {
 	if concurrency <= 0 {
 		concurrency = runtime.NumCPU()
@@ -615,12 +615,12 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 
 	var wg sync.WaitGroup
 	// testMap := make(map[string]int)
-	// testMap["66c93ec8bbb2548baba1502d6a7744271ca88e999d2e20e619168dd38898cd02"] = 1 // 特殊地址测试
+	// testMap["66c93ec8bbb2548baba1502d6a7744271ca88e999d2e20e619168dd38898cd02"] = 1 // Special address test
 	// testMap["1b158e20503c3f10fac31285308fbb44ec8b7a684a95384e6f643c3e654718f8"] = 2
 	// testMap["ac7521d18f7ee7ad887832312088f64e0f4ffefbe6334b237aeb2b38c0bad2be"] = 3
 	// testMap["c6b2309a4cc4b52a995cc10ed7ccc50c9842bb19c26f2824517f73185ee6ca04"] = 4
 	// testMap2 := make(map[string]int)
-	// 启动并发 worker
+	// Start concurrent workers
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
 		go func() {
@@ -633,7 +633,7 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 				}
 				db := s.getShard(txArr[0])
 				// if _, ok := testMap[txArr[0]]; ok {
-				// 	fmt.Println("发现测试交易:", j.key)
+				// 	fmt.Println("Found test transaction:", j.key)
 				// 	testMap2[j.key] = 1
 				// }
 				value, closer, err := db.Get([]byte(txArr[0]))
@@ -646,10 +646,10 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 					continue
 				}
 
-				// 修复1: 立即复制数据并关闭资源，避免defer在循环中积累
+				// Fix 1: Immediately copy data and close resources to avoid defer accumulation in loops
 				valueStr := string(append([]byte(nil), value...))
 
-				closer.Close() // 立即关闭而不是延迟
+				closer.Close() // Close immediately instead of deferring
 
 				resultsCh <- result{
 					key:     j.key,
@@ -659,7 +659,7 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 		}()
 	}
 
-	// 发送任务
+	// Send tasks
 	go func() {
 		for _, outkey := range *outpoints {
 			jobsCh <- job{
@@ -669,7 +669,7 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 		close(jobsCh)
 	}()
 
-	// 收集结果
+	// Collect results
 	go func() {
 		wg.Wait()
 		close(resultsCh)
@@ -686,7 +686,7 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 		if r.address != "" {
 			results[r.key], _ = getAddressByStr(r.key, r.address)
 			// if _, ok := testMap2[r.key]; ok {
-			// 	fmt.Println("获取测试交易结果:", r.key, r.address)
+			// 	fmt.Println("Get test transaction result:", r.key, r.address)
 			// }
 		}
 
@@ -694,7 +694,7 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 	finalResults := make(map[string][]string)
 	for k, v := range results {
 		// if v == "16Cxq6PZNKa5Gnw5GFrco5jkyrzbNQfHsR" {
-		// 	fmt.Println("发现特殊地址:", v, k)
+		// 	fmt.Println("Found special address:", v, k)
 		// }
 		if v == "errAddress" {
 			continue
@@ -702,8 +702,8 @@ func (s *PebbleStore) QueryUTXOAddresses(outpoints *[]string, concurrency int) (
 		finalResults[v] = append(finalResults[v], k)
 	}
 
-	// 修复2: 优化内存使用
-	results = nil // 允许尽早回收
+	// Fix 2: Optimize memory usage
+	results = nil // Allow early garbage collection
 
 	return finalResults, finalErr
 }
@@ -728,17 +728,17 @@ func getAddressByStr(key, results string) (string, error) {
 	return arr[0], nil
 }
 
-// QueryUTXOAddress 查询单个UTXO的地址信息
+// QueryUTXOAddress queries address information for a single UTXO
 func (s *PebbleStore) QueryUTXOAddress(outpoint string) (string, error) {
 	txArr := strings.Split(outpoint, ":")
 	if len(txArr) != 2 {
 		return "", fmt.Errorf("invalid key format: %s", outpoint)
 	}
 
-	// 获取对应分片的DB
+	// Get the corresponding shard DB
 	db := s.getShard(txArr[0])
 
-	// 查询交易信息
+	// Query transaction information
 	value, closer, err := db.Get([]byte(txArr[0]))
 	if err != nil {
 		if err == pebble.ErrNotFound {
@@ -748,10 +748,10 @@ func (s *PebbleStore) QueryUTXOAddress(outpoint string) (string, error) {
 	}
 	defer closer.Close()
 
-	// 复制数据
+	// Copy data
 	valueStr := string(append([]byte(nil), value...))
 
-	// 解析地址信息
+	// Parse address information
 	address, err := getAddressByStr(outpoint, valueStr)
 	if err != nil {
 		return "", err

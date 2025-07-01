@@ -8,7 +8,7 @@ import (
 type MempoolInfo struct {
 	Size  int64 `json:"size"`
 	Bytes int64 `json:"bytes"`
-	// 你可以根据需要添加更多字段
+	// You can add more fields as needed
 }
 type ChainStatus struct {
 	Chain                string `json:"chain"`
@@ -31,7 +31,7 @@ type SimpleBlockChainInfo struct {
 	Difficulty    float64 `json:"difficulty"`
 	MedianTime    int64   `json:"mediantime"`
 	Chainwork     string  `json:"chainwork"`
-	// 不要 softforks 字段
+	// Don't include softforks field
 }
 
 func (c *Client) GetChainStatus() (*ChainStatus, error) {
@@ -57,7 +57,7 @@ func (c *Client) GetChainStatus() (*ChainStatus, error) {
 		return nil, fmt.Errorf("getmempoolinfo: %w", err)
 	}
 
-	// 4. 估算区块大小（用最新区块的size）
+	// 4. Estimate block size (using the size of the latest block)
 	bestBlockHash, err := c.rpcClient.GetBestBlockHash()
 	if err != nil {
 		return nil, fmt.Errorf("getbestblockhash: %w", err)

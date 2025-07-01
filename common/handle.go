@@ -5,26 +5,26 @@ import (
 	"sync"
 )
 
-// 改为池化指向切片的指针
+// Change to pool pointers to slices
 
 var bytePool = sync.Pool{
 	New: func() interface{} {
-		buf := make([]byte, 0, 1024) // 初始容量
-		return &buf                  // 返回指针
+		buf := make([]byte, 0, 1024) // Initial capacity
+		return &buf                  // Return pointer
 	},
 }
 
 func InitBytePool(size int) {
 	bytePool = sync.Pool{
 		New: func() interface{} {
-			buf := make([]byte, 0, size*1024) // 初始容量
-			return &buf                       // 返回指针
+			buf := make([]byte, 0, size*1024) // Initial capacity
+			return &buf                       // Return pointer
 		},
 	}
 }
 
 func ConcatBytesOptimized(values []string, sep string) string {
-	// 处理边界情况
+	// Handle edge cases
 	switch len(values) {
 	case 0:
 		return ""
@@ -32,42 +32,42 @@ func ConcatBytesOptimized(values []string, sep string) string {
 		return values[0]
 	}
 
-	// 计算总长度（含分隔符）
+	// Calculate total length (including separators)
 	total := 0
 	sepLen := len(sep)
 	for _, s := range values {
 		total += len(s)
 	}
-	total += sepLen * (len(values) - 1) // 分隔符总长度
+	total += sepLen * (len(values) - 1) // Total separator length
 
-	// 获取/创建缓冲区 - 正确处理指针
+	// Get/create buffer - correctly handle pointer
 	bufPtr := bytePool.Get().(*[]byte)
-	buf := *bufPtr // 解引用获取实际切片
+	buf := *bufPtr // Dereference to get actual slice
 
 	if cap(buf) < total {
-		// 如果容量不够，创建新切片
+		// If capacity is insufficient, create new slice
 		buf = make([]byte, 0, total)
-		*bufPtr = buf // 更新指针指向的切片
+		*bufPtr = buf // Update the slice pointed to by the pointer
 	} else {
-		// 重用现有容量
+		// Reuse existing capacity
 		buf = buf[:0]
 	}
 
-	// 带分隔符的拼接逻辑
+	// Concatenation logic with separators
 	buf = append(buf, values[0]...)
 	for _, s := range values[1:] {
 		buf = append(buf, sep...)
 		buf = append(buf, s...)
 	}
 
-	// 返回结果并正确回收缓冲区
+	// Return result and correctly recycle buffer
 	result := string(buf)
-	*bufPtr = buf[:0]    // 更新指针指向的切片，重置长度
-	bytePool.Put(bufPtr) // 放回指针对象
+	*bufPtr = buf[:0]    // Update the slice pointed to by the pointer, reset length
+	bytePool.Put(bufPtr) // Put back the pointer object
 	return result
 }
 
-// 使用bytes.Buffer替代字符串拼接 - 保留但不推荐使用的实现
+// Use bytes.Buffer instead of string concatenation - keep but not recommended implementation
 func ConcatBytesOptimized1(parts []string, separator string) string {
 	if len(parts) == 0 {
 		return ""
@@ -76,14 +76,14 @@ func ConcatBytesOptimized1(parts []string, separator string) string {
 		return parts[0]
 	}
 
-	// 预估总长度以减少分配
+	// Estimate total length to reduce allocations
 	totalLen := 0
 	for _, s := range parts {
 		totalLen += len(s)
 	}
 	totalLen += len(separator) * (len(parts) - 1)
 
-	// 使用预分配的buffer
+	// Use pre-allocated buffer
 	var buf bytes.Buffer
 	buf.Grow(totalLen)
 
