@@ -7,9 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"strings"
+
+	chaincfg2 "github.com/bitcoinsv/bsvd/chaincfg"
+	wire2 "github.com/bitcoinsv/bsvd/wire"
 
 	bsvwire "github.com/bitcoinsv/bsvd/wire"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -306,6 +311,82 @@ func GetAddressFromScript(pubKey string, pkScript []byte, params *chaincfg.Param
 		address = "errAddress"
 		return
 	}
+}
 
-	return
+// DeserializeTransaction deserializes byte array to transaction
+func DeserializeTransaction(data []byte) (*wire.MsgTx, error) {
+	tx := wire.NewMsgTx(wire.TxVersion)
+	err := tx.Deserialize(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	return tx, nil
+}
+
+// DeserializeTransaction deserializes byte array to transaction
+func DeserializeMvcTransaction(data []byte) (*wire.MsgTx, error) {
+	// First convert byte array to hexadecimal string
+	txHex := hex.EncodeToString(data)
+
+	// Use parseMvcTx to parse transaction
+	mvcTx, err := parseMvcTx(txHex)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create new wire.MsgTx
+	btcTx := wire.NewMsgTx(wire.TxVersion)
+
+	// Copy version number
+	btcTx.Version = mvcTx.Version
+
+	// Copy inputs
+	for _, in := range mvcTx.TxIn {
+		btcTx.AddTxIn(&wire.TxIn{
+			PreviousOutPoint: wire.OutPoint{
+				Hash:  chainhash.Hash(in.PreviousOutPoint.Hash),
+				Index: in.PreviousOutPoint.Index,
+			},
+			SignatureScript: in.SignatureScript,
+			Sequence:        in.Sequence,
+		})
+	}
+
+	// Copy outputs
+	for _, out := range mvcTx.TxOut {
+		btcTx.AddTxOut(&wire.TxOut{
+			Value:    out.Value,
+			PkScript: out.PkScript,
+		})
+	}
+
+	// Copy lock time
+	btcTx.LockTime = mvcTx.LockTime
+
+	return btcTx, nil
+}
+
+func GetMvcNetParams(net string) *chaincfg2.Params {
+	var (
+		netParams *chaincfg2.Params = &chaincfg2.MainNetParams
+	)
+	switch strings.ToLower(net) {
+	case "mainnet", "livenet":
+		netParams = &chaincfg2.MainNetParams
+		break
+	case "testnet":
+		netParams = &chaincfg2.TestNet3Params
+		break
+	}
+	return netParams
+}
+
+func parseMvcTx(txRaw string) (*wire2.MsgTx, error) {
+	txRawByte, _ := hex.DecodeString(txRaw)
+	tx := wire2.NewMsgTx(2)
+	err := tx.Deserialize(bytes.NewReader(txRawByte))
+	if err != nil {
+		return nil, err
+	}
+	return tx, nil
 }

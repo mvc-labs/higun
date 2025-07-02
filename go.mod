@@ -9,6 +9,7 @@ toolchain go1.24.3
 //replace github.com/btcsuite/btcd => ./btcd
 
 require (
+	github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173
 	github.com/btcsuite/btcd v0.24.2
 	github.com/btcsuite/btcd/btcutil v1.1.5
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
@@ -17,9 +18,12 @@ require (
 	github.com/gin-gonic/gin v1.10.0
 	github.com/go-zeromq/zmq4 v0.17.0
 	github.com/mattn/go-colorable v0.1.14
+	github.com/mvc-labs/metacontract-script-decoder v0.0.2
 	github.com/schollz/progressbar/v3 v3.18.0
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+replace github.com/metasv/metacontract-script-decoder => github.com/mvc-labs/metacontract-script-decoder v0.0.1
 
 require (
 	github.com/DataDog/zstd v1.5.6-0.20230824185856-869dae002e5e // indirect
@@ -73,7 +77,7 @@ require (
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.25.0 // indirect
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect
-	golang.org/x/net v0.25.0 // indirect
+	golang.org/x/net v0.26.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/term v0.28.0 // indirect
@@ -82,6 +86,11 @@ require (
 )
 
 require (
-	github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173
 	github.com/cockroachdb/pebble v1.1.5
+	github.com/cockroachdb/pebble/v2 v2.0.6
+)
+
+require (
+	github.com/cockroachdb/crlib v0.0.0-20241015224233-894974b3ad94 // indirect
+	github.com/cockroachdb/swiss v0.0.0-20250624142022-d6e517c1d961 // indirect
 )

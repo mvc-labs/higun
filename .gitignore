@@ -5,3 +5,6 @@ blockinfo_data
 .idea
 config_mvc_ft*
 config_*
+config_mvc_*.yaml
+.DS_Store
+.idea
