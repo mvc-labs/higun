@@ -1,0 +1,56 @@
+# Use multi-stage build
+FROM golang:1.22 AS builder
+
+# Set working directory
+WORKDIR /app
+
+# Install necessary build tools
+RUN apt-get update && apt-get install -y git gcc
+
+# Copy go.mod and go.sum
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code and config files
+COPY . .
+
+# Ensure config file exists
+RUN if [ ! -f "config_mvc_ft_pro.yaml" ]; then \
+        echo "Error: Missing config file config_mvc_ft_pro.yaml" && exit 1; \
+    fi
+
+# Build application
+RUN CGO_ENABLED=1 GOOS=linux go build -o ft-utxo-indexer apps/ft-main/main.go
+
+# Use Ubuntu as runtime environment
+FROM ubuntu:22.04
+
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tzdata \
+    libzmq3-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set timezone
+ENV TZ=Asia/Shanghai
+
+# Create data directory
+RUN mkdir -p /app/data
+
+# Copy compiled application and config files from builder stage
+COPY --from=builder /app/ft-utxo-indexer /app/
+COPY --from=builder /app/config_mvc_ft_pro.yaml /app/config_mvc_ft_pro.yaml
+
+# Set working directory
+WORKDIR /app
+
+# Expose API port
+EXPOSE 7789
+
+# Run application
+ENTRYPOINT ["./ft-utxo-indexer"]
+CMD ["-config", "config_mvc_ft_pro.yaml"] 

@@ -1,0 +1,21 @@
+version: '3.3'
+
+services:
+  ft-utxo-indexer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.ft
+    container_name: ft-utxo-indexer
+    restart: unless-stopped
+    ports:
+      - "7789:7789"
+    volumes:
+      - ../../pebble_data/data_utxo_ft:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    command: ["-config", "config_mvc_ft_pro.yaml"]
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G 

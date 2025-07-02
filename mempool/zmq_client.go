@@ -91,9 +91,11 @@ func (c *ZMQClient) Stop() {
 func (c *ZMQClient) listen() {
 	defer c.wg.Done()
 
+	log.Printf("Starting ZMQ client listener: %s", c.address)
 	for {
 		select {
 		case <-c.ctx.Done():
+			log.Println("Received stop signal, ZMQ client is shutting down...")
 			return
 		default:
 			// Create a new socket
@@ -114,6 +116,7 @@ func (c *ZMQClient) listen() {
 					log.Printf("Failed to subscribe to topic %s: %v", topic, err)
 					continue
 				}
+				log.Printf("Successfully subscribed to topic: %s", topic)
 			}
 
 			log.Printf("Successfully connected to ZMQ server: %s", c.address)
